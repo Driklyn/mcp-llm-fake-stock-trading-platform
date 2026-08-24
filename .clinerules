@@ -1,0 +1,9 @@
+# General Rules
+
+- Don't try to build the client/server after changes.
+
+# Token Management Rules
+
+- Never use search_files or grep across the entire codebase unless explicitly asked.
+- When creating multiple files, always update the primary entry point (e.g. App.jsx) progressively rather than waiting until the end.
+- If a file read loop takes more than 3 turns, stop and ask the user for direct file paths.

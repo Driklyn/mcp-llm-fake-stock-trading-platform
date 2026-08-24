@@ -1,0 +1,30 @@
+{
+  "name": "client",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "ui": "*"
+  },
+  "dependenciesMeta": {
+    "ui": {
+      "workspace": true
+    }
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^6.0.5",
+    "@vanilla-extract/vite-plugin": "^5.2.6",
+    "typescript": "^5.7.2",
+    "vite": "^8.2.1"
+  }
+}
