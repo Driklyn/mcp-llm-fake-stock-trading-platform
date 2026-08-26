@@ -646,14 +646,26 @@ async function cancelOrder(pool, orderId) {
  * max 1 client, so we cannot issue pool queries while holding the only client
  * inside a transaction). A fill that fails validation (e.g. insufficient cash)
  * marks the order 'failed' without rolling back the rest of the batch.
+ *
+ * @param {string} [targetSymbol=null] - Optional stock symbol from reactive stream event.
+ * @param {number} [streamPrice=null] - Optional explicit price passed directly from DynamoDB stream records to bypass lookups.
  */
-async function processOrders(pool, region) {
+async function processOrders(
+  pool,
+  region,
+  targetSymbol = null,
+  streamPrice = null,
+) {
   const open = await pool.query(
     "SELECT id, symbol, side, type, quantity, price FROM orders WHERE status = 'open' ORDER BY id",
   );
   const pricedOrders = [];
   for (const order of open.rows) {
-    const fillPrice = await latestPrice(region, order.symbol, pool);
+    const fillPrice =
+      streamPrice !== null && order.symbol === targetSymbol
+        ? streamPrice
+        : await latestPrice(region, order.symbol, pool);
+
     if (orderTriggered(order, fillPrice)) {
       pricedOrders.push({ ...order, fillPrice });
     }
@@ -823,16 +835,28 @@ export async function handler(event = {}) {
         `trading-api: Processing event stream batch containing ${event.Records.length} mutations.`,
       );
 
-      // Because we applied an "INSERT" filter pattern directly in our Terraform configuration,
-      // we already know every single record here is a newly minted market price tick.
-      // This allows us to simply execute our order processing logic right here!
-      const executionResult = await processOrders(pool, region);
+      let totalProcessedFromBatch = 0;
+
+      // Loop over your records sequentially to process the 4 future ticks
+      for (const record of event.Records) {
+        if (record.eventName === "INSERT") {
+          const symbol = record.dynamodb.NewImage.symbol.S;
+          const price = parseFloat(record.dynamodb.NewImage.price.N);
+
+          const result = await processOrders(pool, region, symbol, price);
+          totalProcessedFromBatch += result.processed;
+        }
+      }
 
       console.log(
-        `trading-api: Stream processing finished. Orders filled or failed:`,
-        executionResult,
+        `trading-api: Stream processing finished. Total orders filled:`,
+        totalProcessedFromBatch,
       );
-      return { ok: true, streamBatchProcessed: event.Records.length };
+      return {
+        ok: true,
+        streamBatchProcessed: event.Records.length,
+        totalOrdersFilled: totalProcessedFromBatch,
+      };
     }
 
     // =========================================================================
