@@ -2,29 +2,27 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import express from "express";
 import { WebSocketServer } from "ws";
-import path from "node:path";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { loadStateFromFile, saveStateToFile } from "./storage.js";
 import { createTradingMcpServer } from "./mcp/index.js";
 import {
   getAssistantResponse,
   normalizeTradeQuantity,
 } from "./llm/assistant.js";
-import {
-  createInitialState,
-  buyStock,
-  sellStock,
-  transferCash,
-  tickMarket,
-  placeOrder,
-  cancelOrder,
-  listOrders,
-  getPortfolioSummary,
-} from "./trading/engine.js";
+import account from "./trading/account.js";
+import { isCloudMode } from "./trading/cloudClient.js";
 
-const stateFile = path.resolve(process.cwd(), "data", "state.json");
-const existingState = loadStateFromFile(stateFile) ?? createInitialState();
-const state = existingState;
+// The server is a stateless proxy over the deployed trading-api ledger
+// (infra/lambdas/trading-api). There is no local account state anymore —
+// every read and mutation is delegated to TRADING_API_URL.
+if (!isCloudMode()) {
+  console.error(
+    "TRADING_API_URL is not set. Point it at the deployed trading-api base URL " +
+      "(terraform output `trading_api_base_url`, e.g. https://dxxxx.cloudfront.net).",
+  );
+  process.exit(1);
+}
+
+await account.init();
 const pendingConfirmations = new Map();
 
 function requiresConfirmationForTradeValue(quantity, price) {
@@ -37,8 +35,14 @@ function requiresConfirmationForTradeValue(quantity, price) {
   );
 }
 
-function buildChatResponse(plan, payload, fallbackText) {
+async function currentPrice() {
+  const quote = await account.getQuote();
+  return Number(quote?.price ?? 0);
+}
+
+async function buildChatResponse(plan, payload, fallbackText) {
   const tool = plan?.tool;
+  const pricePerShare = await currentPrice();
 
   if (tool === null) {
     return {
@@ -54,7 +58,7 @@ function buildChatResponse(plan, payload, fallbackText) {
   if (!tool) {
     return {
       plan: { tool: "get_account_snapshot", arguments: {} },
-      payload: getPortfolioSummary(state),
+      payload: await account.getPortfolioSummary(),
       text:
         fallbackText ??
         "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.",
@@ -62,22 +66,24 @@ function buildChatResponse(plan, payload, fallbackText) {
   }
 
   if (tool === "get_account_snapshot") {
+    const summary = await account.getPortfolioSummary();
     return {
       plan,
-      payload: getPortfolioSummary(state),
-      text: `Portfolio snapshot: cash $${Number(state.account.cashAvailable ?? 0).toFixed(2)}, holdings ${state.account.holdings}, invested $${Number(state.account.costBasis ?? 0).toFixed(2)}, total equity $${Number(state.account.totalEquity ?? 0).toFixed(2)}, gains/losses $${Number(getPortfolioSummary(state).totalGainsLosses ?? 0).toFixed(2)}.`,
+      payload: summary,
+      text: `Portfolio snapshot: cash $${Number(summary.account.cashAvailable ?? 0).toFixed(2)}, holdings ${summary.account.holdings}, invested $${Number(summary.account.costBasis ?? 0).toFixed(2)}, total equity $${Number(summary.account.totalEquity ?? 0).toFixed(2)}, gains/losses $${Number(summary.totalGainsLosses ?? 0).toFixed(2)}.`,
     };
   }
 
   if (tool === "get_quote") {
+    const quote = await account.getQuote();
     return {
       plan,
       payload: {
-        symbol: state.symbol,
-        price: state.price,
-        history: state.history.slice(-30),
+        symbol: quote.symbol,
+        price: quote.price,
+        history: quote.history.slice(-30),
       },
-      text: `Current FAKE price: $${Number(state.price ?? 0).toFixed(2)}.`,
+      text: `Current FAKE price: $${Number(quote.price ?? 0).toFixed(2)}.`,
     };
   }
 
@@ -98,20 +104,19 @@ function buildChatResponse(plan, payload, fallbackText) {
 
     // If the assistant supplied a dollar `amount`, compute whole-share quantity using the live price
     if (amount > 0) {
-      const computed = Math.floor(amount / Number(state.price ?? 0));
+      const computed = Math.floor(amount / Number(pricePerShare ?? 0));
       if (computed <= 0) {
         return {
           plan,
           payload: {
-            error: `At the current price of $${Number(state.price ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
+            error: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
           },
-          text: `At the current price of $${Number(state.price ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
+          text: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
         };
       }
       quantity = computed;
     }
 
-    const pricePerShare = Number(state.price ?? 0);
     const tradeValue = quantity * pricePerShare;
 
     if (!confirmed && tradeValue >= 1000) {
@@ -144,8 +149,7 @@ function buildChatResponse(plan, payload, fallbackText) {
 
     // confirmed or not requiring confirmation -> proceed
     try {
-      const result = buyStock(state, quantity);
-      saveStateToFile(stateFile, state);
+      const result = await account.buy(quantity);
       const executedAmount = Number(result.quantity) * pricePerShare;
       const requestedAmount = Number(plan.arguments?.amount ?? 0);
       const remainder =
@@ -187,20 +191,19 @@ function buildChatResponse(plan, payload, fallbackText) {
     }
 
     if (amount > 0) {
-      const computed = Math.floor(amount / Number(state.price ?? 0));
+      const computed = Math.floor(amount / Number(pricePerShare ?? 0));
       if (computed <= 0) {
         return {
           plan,
           payload: {
-            error: `At the current price of $${Number(state.price ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
+            error: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
           },
-          text: `At the current price of $${Number(state.price ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
+          text: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
         };
       }
       quantity = computed;
     }
 
-    const pricePerShare = Number(state.price ?? 0);
     const tradeValue = quantity * pricePerShare;
 
     if (!confirmed && tradeValue >= 1000) {
@@ -230,10 +233,10 @@ function buildChatResponse(plan, payload, fallbackText) {
         text: pendingMessage,
       };
     }
+
     // proceed
     try {
-      const result = sellStock(state, quantity);
-      saveStateToFile(stateFile, state);
+      const result = await account.sell(quantity);
       const executedAmount = Number(result.quantity) * pricePerShare;
       const requestedAmount = Number(plan.arguments?.amount ?? 0);
       const remainder =
@@ -261,13 +264,20 @@ function buildChatResponse(plan, payload, fallbackText) {
 
   if (tool === "transfer_cash") {
     const amount = Number(plan.arguments?.amount ?? 0);
-    const result = transferCash(state, amount);
-    saveStateToFile(stateFile, state);
-    return {
-      plan,
-      payload: result,
-      text: `Cash transfer processed. Available cash is now $${Number(result.cashAvailable ?? 0).toFixed(2)}.`,
-    };
+    try {
+      const result = await account.transfer(amount);
+      return {
+        plan,
+        payload: result,
+        text: `Cash transfer processed. Available cash is now $${Number(result.cashAvailable ?? 0).toFixed(2)}.`,
+      };
+    } catch (error) {
+      return {
+        plan,
+        payload: { error: error?.message ?? String(error) },
+        text: error?.message ?? String(error),
+      };
+    }
   }
 
   if (tool === "place_order") {
@@ -293,15 +303,13 @@ function buildChatResponse(plan, payload, fallbackText) {
       };
     }
 
-    const tradeValue = quantity * Number(state.price ?? 0);
+    const tradeValue = quantity * Number(pricePerShare ?? 0);
 
     if (!confirmed && tradeValue >= 1000) {
       const id = randomUUID();
       pendingConfirmations.set(id, {
         tool,
-        arguments: {
-          ...(plan.arguments ?? {}),
-        },
+        arguments: { ...(plan.arguments ?? {}) },
       });
       return {
         plan,
@@ -311,20 +319,19 @@ function buildChatResponse(plan, payload, fallbackText) {
           message: `This ${orderType} ${orderSide} order is worth $${tradeValue.toFixed(2)} at the current price. Please confirm before placing it.`,
           quantity,
           value: tradeValue,
-          pricePerShare: Number(state.price ?? 0),
+          pricePerShare: Number(pricePerShare ?? 0),
         },
         text: `This ${orderType} ${orderSide} order is worth $${tradeValue.toFixed(2)} at the current price. Please confirm before placing it.`,
       };
     }
 
     try {
-      const result = placeOrder(state, {
+      const result = await account.placeOrder({
         type: orderType,
         side: orderSide,
         quantity,
         price: triggerPrice,
       });
-      saveStateToFile(stateFile, state);
       return {
         plan,
         payload: result,
@@ -342,7 +349,7 @@ function buildChatResponse(plan, payload, fallbackText) {
   if (tool === "list_orders") {
     const filterType = String(plan.arguments?.type ?? "").toLowerCase();
     const filterSide = String(plan.arguments?.side ?? "").toLowerCase();
-    const orders = listOrders(state).orders.filter(
+    const orders = (await account.listOrders()).orders.filter(
       (order) =>
         order.status === "open" &&
         (!filterType || order.type === filterType) &&
@@ -358,21 +365,30 @@ function buildChatResponse(plan, payload, fallbackText) {
   }
 
   if (tool === "cancel_order") {
-    const result = cancelOrder(state, plan.arguments?.orderId ?? "pending");
-    saveStateToFile(stateFile, state);
-    return {
-      plan,
-      payload: result,
-      text:
-        result?.status === "cancelled"
-          ? `Canceled order ${plan.arguments?.orderId ?? "the selected order"}.`
-          : "I could not cancel that order.",
-    };
+    try {
+      const result = await account.cancelOrder(
+        plan.arguments?.orderId ?? "pending",
+      );
+      return {
+        plan,
+        payload: result,
+        text:
+          result?.status === "cancelled"
+            ? `Canceled order ${plan.arguments?.orderId ?? "the selected order"}.`
+            : "I could not cancel that order.",
+      };
+    } catch (error) {
+      return {
+        plan,
+        payload: { error: error?.message ?? String(error) },
+        text: error?.message ?? String(error),
+      };
+    }
   }
 
   return {
     plan,
-    payload: getPortfolioSummary(state),
+    payload: await account.getPortfolioSummary(),
     text:
       fallbackText ??
       "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.",
@@ -446,7 +462,7 @@ async function handleChatRequest(req, res) {
         },
       };
 
-      const executed = buildChatResponse(confirmationPlan, null, "");
+      const executed = await buildChatResponse(confirmationPlan, null, "");
       res.json({ ...executed, text: executed.text });
       return;
     }
@@ -457,18 +473,15 @@ async function handleChatRequest(req, res) {
         message.toLowerCase(),
       );
 
-    const response = await getAssistantResponse(
-      confirmationPrompt ? message : message,
-      {
-        baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434/api",
-        fetchFn: globalThis.fetch,
-        pricePerShare: state.price,
-        // If the user replied with a confirmation-like phrase, pass the most recent pending confirmation
-        pendingTool: confirmationPrompt
-          ? Array.from(pendingConfirmations.values()).slice(-1)[0]
-          : undefined,
-      },
-    );
+    const response = await getAssistantResponse(message, {
+      baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434/api",
+      fetchFn: globalThis.fetch,
+      pricePerShare: await currentPrice(),
+      // If the user replied with a confirmation-like phrase, pass the most recent pending confirmation
+      pendingTool: confirmationPrompt
+        ? Array.from(pendingConfirmations.values()).slice(-1)[0]
+        : undefined,
+    });
 
     const plan = response?.plan ?? {
       tool: "get_account_snapshot",
@@ -488,7 +501,7 @@ async function handleChatRequest(req, res) {
       response?.text ??
       "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.";
 
-    const executed = buildChatResponse(plan, null, fallbackText);
+    const executed = await buildChatResponse(plan, null, fallbackText);
     res.json({
       ...response,
       ...executed,
@@ -505,14 +518,20 @@ async function handleChatRequest(req, res) {
 
 app.post("/api/assistant", handleChatRequest);
 
-app.get("/api/snapshot", (req, res) => {
-  res.json({
-    snapshot: getPortfolioSummary(state),
-    price: state.price,
-    account: state.account,
-    history: state.history,
-    orders: listOrders(state).orders,
-  });
+app.get("/api/snapshot", async (req, res) => {
+  try {
+    const summary = await account.getPortfolioSummary({ force: true });
+    res.json({
+      snapshot: { ...summary, marketParams: account.getMarketParams() },
+      marketParams: account.getMarketParams(),
+      price: summary.price,
+      account: summary.account,
+      history: summary.history,
+      orders: summary.orders,
+    });
+  } catch (error) {
+    res.status(503).json({ error: error?.message ?? String(error) });
+  }
 });
 
 app.post("/mcp", async (req, res) => {
@@ -530,7 +549,7 @@ app.post("/mcp", async (req, res) => {
           transports.set(newSessionId, transport);
         },
       });
-      const serverInstance = createTradingMcpServer({ state });
+      const serverInstance = createTradingMcpServer();
       await serverInstance.connect(transport);
       transport.onclose = () => {
         if (transport.sessionId) {
@@ -613,35 +632,61 @@ function broadcast(payload) {
   }
 }
 
-function buildSnapshot() {
+async function buildSnapshot() {
+  const summary = await account.getPortfolioSummary();
   return {
     type: "snapshot",
-    payload: getPortfolioSummary(state),
+    payload: {
+      ...summary,
+      marketParams: account.getMarketParams(),
+    },
   };
 }
 
-setInterval(() => {
-  const nextPrice = tickMarket(state);
-  saveStateToFile(stateFile, state);
-  broadcast({
-    type: "market-tick",
-    payload: {
-      price: nextPrice,
-      history: state.history,
-      account: state.account,
-      orders: listOrders(state).orders,
-    },
-  });
-  broadcast(buildSnapshot());
-}, 15000);
+let marketAdvanceInFlight = false;
+let lastTickedPrice = null;
 
-wss.on("connection", (ws) => {
-  ws.send(JSON.stringify(buildSnapshot()));
+async function runMarketAdvance() {
+  if (marketAdvanceInFlight) return;
+  marketAdvanceInFlight = true;
+  try {
+    const snapshot = await buildSnapshot();
+    const price = Number(snapshot.payload.price ?? 0);
+    if (lastTickedPrice === null || price !== lastTickedPrice) {
+      lastTickedPrice = price;
+      broadcast({
+        type: "market-tick",
+        payload: {
+          price,
+          history: snapshot.payload.history,
+          account: snapshot.payload.account,
+          orders: snapshot.payload.orders,
+        },
+      });
+    }
+    broadcast(snapshot);
+  } catch (error) {
+    console.error("Market refresh failed:", error);
+  } finally {
+    marketAdvanceInFlight = false;
+  }
+}
 
-  ws.on("message", (message) => {
+setInterval(runMarketAdvance, 15000);
+
+wss.on("connection", async (ws) => {
+  try {
+    ws.send(JSON.stringify(await buildSnapshot()));
+  } catch (error) {
+    ws.send(
+      JSON.stringify({ type: "error", error: error?.message ?? String(error) }),
+    );
+  }
+
+  ws.on("message", async (message) => {
     try {
       const data = JSON.parse(message.toString());
-      const pricePerShare = Number(state.price ?? 0);
+      const pricePerShare = await currentPrice();
 
       if (data.type === "buy") {
         let quantity = Number(data.quantity ?? 1);
@@ -667,7 +712,7 @@ wss.on("connection", (ws) => {
 
         const tradeValue = quantity * pricePerShare;
         if (
-          requiresConfirmationForTradeValue(quantity, state.price) &&
+          requiresConfirmationForTradeValue(quantity, pricePerShare) &&
           !confirmed
         ) {
           ws.send(
@@ -686,8 +731,7 @@ wss.on("connection", (ws) => {
         }
 
         try {
-          const result = buyStock(state, quantity);
-          saveStateToFile(stateFile, state);
+          const result = await account.buy(quantity);
           const executedAmount = Number(result.quantity) * pricePerShare;
           const remainder =
             amount > 0 ? Math.max(0, amount - executedAmount) : null;
@@ -708,7 +752,7 @@ wss.on("connection", (ws) => {
           );
         }
 
-        broadcast(buildSnapshot());
+        broadcast(await buildSnapshot());
         return;
       }
 
@@ -736,7 +780,7 @@ wss.on("connection", (ws) => {
 
         const tradeValue = quantity * pricePerShare;
         if (
-          requiresConfirmationForTradeValue(quantity, state.price) &&
+          requiresConfirmationForTradeValue(quantity, pricePerShare) &&
           !confirmed
         ) {
           ws.send(
@@ -755,8 +799,7 @@ wss.on("connection", (ws) => {
         }
 
         try {
-          const result = sellStock(state, quantity);
-          saveStateToFile(stateFile, state);
+          const result = await account.sell(quantity);
           const executedAmount = Number(result.quantity) * pricePerShare;
           const remainder =
             amount > 0 ? Math.max(0, amount - executedAmount) : null;
@@ -777,21 +820,30 @@ wss.on("connection", (ws) => {
           );
         }
 
-        broadcast(buildSnapshot());
+        broadcast(await buildSnapshot());
         return;
       }
 
       if (data.type === "transfer") {
-        const updated = transferCash(state, data.amount ?? 0);
-        saveStateToFile(stateFile, state);
-        broadcast(buildSnapshot());
-        ws.send(
-          JSON.stringify({
-            type: "trade-result",
-            success: true,
-            payload: updated,
-          }),
-        );
+        try {
+          const updated = await account.transfer(data.amount ?? 0);
+          broadcast(await buildSnapshot());
+          ws.send(
+            JSON.stringify({
+              type: "trade-result",
+              success: true,
+              payload: updated,
+            }),
+          );
+        } catch (err) {
+          ws.send(
+            JSON.stringify({
+              type: "trade-result",
+              success: false,
+              payload: { error: err.message },
+            }),
+          );
+        }
         return;
       }
 
@@ -828,7 +880,7 @@ wss.on("connection", (ws) => {
 
         const tradeValue = quantity * pricePerShare;
         if (
-          requiresConfirmationForTradeValue(quantity, state.price) &&
+          requiresConfirmationForTradeValue(quantity, pricePerShare) &&
           !confirmed
         ) {
           ws.send(
@@ -846,45 +898,68 @@ wss.on("connection", (ws) => {
           return;
         }
 
-        const updated = placeOrder(state, {
-          type: orderType,
-          side: orderSide,
-          quantity,
-          price: orderPrice,
-        });
-        saveStateToFile(stateFile, state);
-        broadcast(buildSnapshot());
-        ws.send(
-          JSON.stringify({
-            type: "trade-result",
-            success: true,
-            payload: updated,
-          }),
-        );
+        try {
+          const updated = await account.placeOrder({
+            type: orderType,
+            side: orderSide,
+            quantity,
+            price: orderPrice,
+          });
+          broadcast(await buildSnapshot());
+          ws.send(
+            JSON.stringify({
+              type: "trade-result",
+              success: true,
+              payload: updated,
+            }),
+          );
+        } catch (err) {
+          ws.send(
+            JSON.stringify({
+              type: "trade-result",
+              success: false,
+              payload: { error: err.message },
+            }),
+          );
+        }
         return;
       }
 
       if (data.type === "cancel_order") {
-        const updated = cancelOrder(state, data.orderId);
-        saveStateToFile(stateFile, state);
-        broadcast(buildSnapshot());
+        try {
+          const updated = await account.cancelOrder(data.orderId);
+          broadcast(await buildSnapshot());
+          ws.send(
+            JSON.stringify({
+              type: "trade-result",
+              success: true,
+              payload: updated,
+            }),
+          );
+        } catch (err) {
+          ws.send(
+            JSON.stringify({
+              type: "trade-result",
+              success: false,
+              payload: { error: err.message },
+            }),
+          );
+        }
+        return;
+      }
+
+      if (data.type === "list_orders") {
         ws.send(
           JSON.stringify({
-            type: "trade-result",
-            success: true,
-            payload: updated,
+            type: "orders",
+            payload: await account.listOrders(),
           }),
         );
         return;
       }
 
-      if (data.type === "list_orders") {
-        ws.send(JSON.stringify({ type: "orders", payload: listOrders(state) }));
-        return;
-      }
-
       if (data.type === "get_snapshot") {
-        ws.send(JSON.stringify(buildSnapshot()));
+        ws.send(JSON.stringify(await buildSnapshot()));
         return;
       }
     } catch (error) {
@@ -895,5 +970,7 @@ wss.on("connection", (ws) => {
 
 server.listen(3001, "0.0.0.0", () => {
   console.log("Fake stock market server running at ws://localhost:3001");
-  saveStateToFile(stateFile, state);
 });
+
+
+

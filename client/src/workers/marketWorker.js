@@ -1,3 +1,9 @@
+/**
+ * Superseded by the deterministic math engine: the client now builds chart
+ * points locally via `buildPriceSeries` from `../utils/marketPrice` (see
+ * App.tsx), so no worker-based history polling is needed anymore.
+ * Kept on disk only for reference; not imported anywhere.
+ */
 self.onmessage = (event) => {
   const { points = [] } = event.data || {};
 

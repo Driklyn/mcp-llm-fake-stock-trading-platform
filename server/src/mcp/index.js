@@ -2,18 +2,13 @@ import * as z from "zod";
 import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import {
-  buyStock,
-  cancelOrder,
-  createInitialState,
-  getPortfolioSummary,
-  listOrders,
-  placeOrder,
-  sellStock,
-  transferCash,
-} from "../trading/engine.js";
+import account from "../trading/account.js";
 
-export function createTradingMcpServer({ state }) {
+/**
+ * MCP tool layer over the account service (which proxies trading-api). The
+ * service is injectable so tests can substitute a stub.
+ */
+export function createTradingMcpServer({ service = account } = {}) {
   const server = new McpServer({
     name: "fake-stock-trading-mcp",
     version: "1.0.0",
@@ -27,7 +22,7 @@ export function createTradingMcpServer({ state }) {
       inputSchema: {},
     },
     async () => {
-      const summary = getPortfolioSummary(state);
+      const summary = await service.getPortfolioSummary();
       return {
         content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
         structuredContent: summary,
@@ -42,10 +37,11 @@ export function createTradingMcpServer({ state }) {
       inputSchema: {},
     },
     async () => {
+      const quote = await service.getQuote();
       const payload = {
-        symbol: "FAKE",
-        price: state.price,
-        history: state.history.slice(-30),
+        symbol: quote.symbol,
+        price: quote.price,
+        history: quote.history.slice(-30),
       };
       return {
         content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
@@ -71,7 +67,8 @@ export function createTradingMcpServer({ state }) {
       },
     },
     async ({ quantity, confirm = false }) => {
-      const tradeValue = Number(quantity) * Number(state.price ?? 0);
+      const quote = await service.getQuote();
+      const tradeValue = Number(quantity) * Number(quote?.price ?? 0);
       if (tradeValue >= 1000 && confirm !== true) {
         return {
           content: [
@@ -98,7 +95,7 @@ export function createTradingMcpServer({ state }) {
         };
       }
 
-      const result = buyStock(state, quantity);
+      const result = await service.buy(quantity);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -123,7 +120,8 @@ export function createTradingMcpServer({ state }) {
       },
     },
     async ({ quantity, confirm = false }) => {
-      const tradeValue = Number(quantity) * Number(state.price ?? 0);
+      const quote = await service.getQuote();
+      const tradeValue = Number(quantity) * Number(quote?.price ?? 0);
       if (tradeValue >= 1000 && confirm !== true) {
         return {
           content: [
@@ -150,7 +148,7 @@ export function createTradingMcpServer({ state }) {
         };
       }
 
-      const result = sellStock(state, quantity);
+      const result = await service.sell(quantity);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -170,7 +168,7 @@ export function createTradingMcpServer({ state }) {
       },
     },
     async ({ amount }) => {
-      const result = transferCash(state, amount);
+      const result = await service.transfer(amount);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -204,7 +202,8 @@ export function createTradingMcpServer({ state }) {
       },
     },
     async ({ type, side, quantity, price, confirm = false }) => {
-      const tradeValue = Number(quantity) * Number(state.price ?? 0);
+      const quote = await service.getQuote();
+      const tradeValue = Number(quantity) * Number(quote?.price ?? 0);
       if (tradeValue >= 1000 && confirm !== true) {
         return {
           content: [
@@ -231,7 +230,7 @@ export function createTradingMcpServer({ state }) {
         };
       }
 
-      const result = placeOrder(state, { type, side, quantity, price });
+      const result = await service.placeOrder({ type, side, quantity, price });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -246,7 +245,7 @@ export function createTradingMcpServer({ state }) {
       inputSchema: {},
     },
     async () => {
-      const result = listOrders(state);
+      const result = await service.listOrders();
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -263,7 +262,7 @@ export function createTradingMcpServer({ state }) {
       },
     },
     async ({ orderId }) => {
-      const result = cancelOrder(state, orderId);
+      const result = await service.cancelOrder(orderId);
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result,
@@ -274,8 +273,8 @@ export function createTradingMcpServer({ state }) {
   return server;
 }
 
-export async function startTradingMcpServer({ state }) {
-  const server = createTradingMcpServer({ state });
+export async function startTradingMcpServer(options = {}) {
+  const server = createTradingMcpServer(options);
   await server.connect(new StdioServerTransport());
   return server;
 }
@@ -284,8 +283,9 @@ if (
   process.argv[1] &&
   pathToFileURL(process.argv[1]).href === import.meta.url
 ) {
-  const state = createInitialState();
-  startTradingMcpServer({ state })
+  account
+    .init()
+    .then(() => startTradingMcpServer())
     .then(() => {
       console.log("Fake stock MCP server running on stdio");
     })

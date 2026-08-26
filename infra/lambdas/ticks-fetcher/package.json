@@ -1,0 +1,14 @@
+{
+  "name": "ticks-fetcher",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "description": "AWS Lambda serving GET /api/v1/ticks from DynamoDB with a strict timestamp <= now gate.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1117.0"
+  }
+}

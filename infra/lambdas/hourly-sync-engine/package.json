@@ -1,0 +1,16 @@
+{
+  "name": "hourly-sync-engine",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "description": "AWS Lambda that hourly copies the last 240 DynamoDB price points into Aurora DSQL as a single bulk insert.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1117.0",
+    "@aws-sdk/dsql-signer": "^3.1117.0",
+    "pg": "^8.13.1"
+  }
+}

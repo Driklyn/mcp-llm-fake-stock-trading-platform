@@ -1,0 +1,14 @@
+{
+  "name": "ticks-generator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "description": "AWS Lambda that writes the 4 deterministic 15-second tick slots of the current minute into DynamoDB in a single batch write.",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1117.0"
+  }
+}

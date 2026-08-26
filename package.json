@@ -5,7 +5,11 @@
   "workspaces": [
     "server",
     "client",
-    "ui"
+    "ui",
+    "infra/lambdas/ticks-generator",
+    "infra/lambdas/ticks-fetcher",
+    "infra/lambdas/trading-api",
+    "infra/lambdas/hourly-sync-engine"
   ],
   "scripts": {
     "dev": "npm run dev --workspace client",

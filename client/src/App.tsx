@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AppShell,
   Layout,
@@ -16,12 +16,17 @@ import PortfolioPanel from "./components/PortfolioPanel";
 import TopBar from "./components/TopBar";
 import type {
   AssistantPayload,
-  ChartInputPoint,
   ChatMessage,
   MarketSnapshot,
   SocketMessage,
 } from "./types";
-import MarketWorker from "./workers/marketWorker.js?worker";
+import {
+  BLOCK_SECONDS,
+  blockForTime,
+  buildPriceSeries,
+  getPriceAtTime,
+  type MarketParams,
+} from "./utils/marketPrice";
 
 type TradeResultPayload = AssistantPayload & {
   executedAmount?: number;
@@ -34,7 +39,8 @@ function App() {
   const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
   const [refreshSeconds, setRefreshSeconds] = useState(15);
   const [message, setMessage] = useState("Connected to market");
-  const [chartPoints, setChartPoints] = useState<ChartInputPoint[]>([]);
+  const [marketParams, setMarketParams] = useState<MarketParams | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
     {
@@ -46,40 +52,38 @@ function App() {
   const [pendingConfirmation, setPendingConfirmation] =
     useState<AssistantPayload | null>(null);
   const [isChatWorking, setIsChatWorking] = useState(false);
-  const workerRef = useRef<Worker | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
-
-  const currentHistory = snapshot?.history ?? [];
 
   useEffect(() => {
     const interval = setInterval(() => {
+      setNowMs(Date.now());
       setRefreshSeconds((previous) => (previous > 1 ? previous - 1 : 15));
     }, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  useEffect(() => {
-    const worker = new MarketWorker();
-    workerRef.current = worker;
+  const currentBlock =
+    marketParams == null ? null : blockForTime(nowMs / 1000);
 
-    worker.onmessage = (
-      event: MessageEvent<{ points?: ChartInputPoint[] }>,
-    ) => {
-      const { points } = event.data || {};
-      setChartPoints(Array.isArray(points) ? points : currentHistory);
-    };
+  const livePrice = useMemo(
+    () =>
+      marketParams && currentBlock != null
+        ? getPriceAtTime(currentBlock * BLOCK_SECONDS, marketParams)
+        : null,
+    [marketParams, currentBlock],
+  );
 
-    return () => worker.terminate();
-  }, [currentHistory]);
+  const CHART_WINDOW_BLOCKS = 960; // 4 hours of 15-second blocks
 
-  useEffect(() => {
-    const normalizedHistory =
-      Array.isArray(currentHistory) && currentHistory.length > 0
-        ? currentHistory
-        : [];
-
-    workerRef.current?.postMessage({ points: normalizedHistory });
-  }, [currentHistory]);
+  const chartPoints = useMemo(() => {
+    if (!marketParams || currentBlock == null) return [];
+    const endSeconds = currentBlock * BLOCK_SECONDS;
+    return buildPriceSeries(
+      endSeconds - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
+      endSeconds,
+      marketParams,
+    );
+  }, [marketParams, currentBlock]);
 
   useEffect(() => {
     let cancelled = false;
@@ -91,10 +95,16 @@ function App() {
           throw new Error("Snapshot unavailable");
         }
 
-        const data: { snapshot?: MarketSnapshot } = await response.json();
+        const data: {
+          snapshot?: MarketSnapshot;
+          marketParams?: MarketParams;
+        } = await response.json();
         const nextSnapshot = data?.snapshot ?? (data as MarketSnapshot);
         if (!cancelled && nextSnapshot) {
           setSnapshot(nextSnapshot);
+          setMarketParams(
+            data?.marketParams ?? nextSnapshot?.marketParams ?? null,
+          );
           setRefreshSeconds(15);
         }
       } catch (err) {
@@ -114,7 +124,11 @@ function App() {
       const data: SocketMessage = JSON.parse(event.data);
 
       if (data.type === "snapshot") {
-        setSnapshot(data.payload as unknown as MarketSnapshot);
+        const payload = data.payload as unknown as MarketSnapshot & {
+          marketParams?: MarketParams;
+        };
+        setSnapshot(payload);
+        setMarketParams((previous) => payload?.marketParams ?? previous);
         setRefreshSeconds(15);
       }
 
@@ -383,7 +397,7 @@ function App() {
 
           <MarketChart
             points={chartPoints}
-            price={currentSnapshot?.price ?? null}
+            price={livePrice}
             refreshSeconds={refreshSeconds}
           />
         </Panel>

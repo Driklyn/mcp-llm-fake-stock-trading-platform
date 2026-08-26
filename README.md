@@ -14,7 +14,8 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 - Large-trade confirmation flow (10+ shares or $1,000+ value) across chat, WebSocket, and MCP
 - MCP server (stdio + streamable HTTP) exposing 8 trading tools
 - Deterministic natural-language intent parser, optionally backed by a local Ollama model
-- Persistent state stored in `server/data/state.json`
+- Account ledger held in Aurora DSQL by the serverless `infra/` stack (`trading-api`);
+  the local server is a stateless proxy over it
 - Canvas-based price chart with chart-data processing in a Web Worker
 - A small Vanilla Extract design-system package (`ui`) shared with the client
 
@@ -22,33 +23,42 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 
 This project is an npm workspaces monorepo:
 
-| Package  | Path      | Description                                                                 |
-| -------- | --------- | --------------------------------------------------------------------------- |
-| `server` | `server/` | Express + WebSocket market server, trading engine, MCP layer, LLM assistant, JSON persistence |
-| `client` | `client/` | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading) |
-| `ui`     | `ui/`     | Shared React component library and design tokens built with Vanilla Extract  |
+| Package  | Path      | Description                                                                                |
+| -------- | --------- | ------------------------------------------------------------------------------------------ |
+| `server` | `server/` | Express + WebSocket proxy over the deployed `trading-api` ledger, MCP layer, LLM assistant |
+| `client` | `client/` | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)            |
+| `ui`     | `ui/`     | Shared React component library and design tokens built with Vanilla Extract                |
 
 ## Local Development
 
-Prerequisites: Node.js with npm.
+Prerequisites: Node.js with npm, plus a deployed instance of the serverless market
+stack (`infra/`) — the local server is a **stateless proxy** over
+`infra/lambdas/trading-api`. There is no local account state anymore.
 
 1. Install dependencies: `npm install`
-2. Start the backend: `npm run dev:server`
-3. Start the front-end: `npm run dev`
-4. Open http://localhost:5173
+2. Deploy the infra stack and read the base URL from the Terraform output
+   `trading_api_base_url` (see `infra/README.md`).
+3. Start the backend, pointing it at the deployed API:
 
-The server listens on port 3001 and serves the REST, WebSocket, and MCP HTTP endpoints.
+   TRADING_API_URL=https://<cloudfront-domain> npm run dev:server
+
+4. Start the front-end: `npm run dev`
+5. Open http://localhost:5173
+
+The server listens on port 3001 and serves the REST, WebSocket, and MCP HTTP
+endpoints. Every account read and mutation is delegated to trading-api; the price
+feed comes from `GET /api/v1/ticks` and the quote/snapshot are cached for 15s.
 
 ### Scripts
 
-| Script | Description |
-| ------ | ----------- |
-| `npm run dev` | Start the Vite client dev server |
-| `npm run dev:server` | Start the market / WebSocket / API server |
-| `npm run build` | Build the client for production |
-| `npm test` | Run the server test suite (`node --test`) |
-| `npm run mcp --workspace server` | Run the MCP server over stdio |
-| `npm run typecheck --workspace client` | Type-check the client |
+| Script                                 | Description                               |
+| -------------------------------------- | ----------------------------------------- |
+| `npm run dev`                          | Start the Vite client dev server          |
+| `npm run dev:server`                   | Start the market / WebSocket / API server |
+| `npm run build`                        | Build the client for production           |
+| `npm test`                             | Run the server test suite (`node --test`) |
+| `npm run mcp --workspace server`       | Run the MCP server over stdio             |
+| `npm run typecheck --workspace client` | Type-check the client                     |
 
 ## Chat Assistant (Optional LLM)
 
@@ -68,7 +78,7 @@ listing or canceling orders. Large trades return a confirmation prompt in the ch
 
 ## MCP Server
 
-The MCP server exposes the trading engine as tools for MCP-capable AI clients. Run it
+The MCP server exposes the trading API as tools for MCP-capable AI clients. Run it
 standalone over stdio:
 
 ```
@@ -89,8 +99,9 @@ Or connect through the main server's streamable HTTP transport at `POST /mcp` (w
 - `list_orders` — list pending and completed orders
 - `cancel_order` — cancel an open order
 
-All tools share state with the WebSocket server, so actions taken through the chat
-panel, the manual trading panel, or MCP are reflected everywhere immediately.
+All tools share the same Aurora DSQL ledger as the WebSocket server, so actions
+taken through the chat panel, the manual trading panel, or MCP are reflected
+everywhere immediately.
 
 ## Design System (`ui`)
 
@@ -102,16 +113,16 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 
 ## Core Behaviors
 
-- Single fake ticker: `FAKE`, seeded at $100 with $10,000 cash
-- Price updates every 15 seconds via a bounded random walk ($20–$500)
-- Cash transfers in and out
-- Market buys and sells (by share count or dollar amount)
-- Limit and stop orders that execute automatically when the market crosses the trigger
+- Single fake ticker: `FAKE`, seeded at $100 (Terraform `market_base_price`)
+- Starting cash from the deployed `account_start_cash` (Terraform variable, default $10,000)
+- Price updates every 15 seconds from the cloud ticks feed (`GET /api/v1/ticks`)
+- Cash transfers in and out (DSQL `transfers` ledger)
+- Market buys and sells (by share count or dollar amount) executed by trading-api
+- Limit and stop orders that trading-api fills reactively against the live price whenever a new tick arrives
 - Large-trade confirmation (10+ shares or $1,000+ value) before execution
 - Portfolio snapshot including invested vs. uninvested cash and gains/losses
 - Transaction history with status-aware, sortable rows
-- Shared state across the market engine, WebSocket server, REST API, and MCP tools
-- State persisted to `server/data/state.json` on every mutation and market tick
+- One shared ledger: every path (WebSocket, REST, MCP) writes through to Aurora DSQL
 
 ## Deployment Notes
 
@@ -124,7 +135,10 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 
 ### AWS (free-tier-friendly)
 
-- Host the frontend in S3 + CloudFront.
-- Host the Node server in a free-tier EC2 / Lightsail instance.
-- Use HTTPS and a public WebSocket endpoint for the live market feed.
-- Persist app state to a file or lightweight database if desired.
+- The full ledger, price feed, and trading API live in the serverless `infra/`
+  stack (see `infra/README.md`): Aurora DSQL + DynamoDB + API Gateway +
+  CloudFront + 4 Lambdas + EventBridge schedules + DynamoDB Streams, all inside the free tier.
+- Run the Node proxy server anywhere that can reach the CloudFront URL
+  (`TRADING_API_URL`), or serve the client directly from CloudFront as well.
+- Use HTTPS and a public WebSocket endpoint for the live market feed when
+  hosting the proxy server remotely.
