@@ -522,12 +522,8 @@ app.get("/api/snapshot", async (req, res) => {
   try {
     const summary = await account.getPortfolioSummary({ force: true });
     res.json({
-      snapshot: { ...summary, marketParams: account.getMarketParams() },
+      ...summary,
       marketParams: account.getMarketParams(),
-      price: summary.price,
-      account: summary.account,
-      history: summary.history,
-      orders: summary.orders,
     });
   } catch (error) {
     res.status(503).json({ error: error?.message ?? String(error) });

@@ -91,7 +91,7 @@ export function createAccountService({
     if (!force && quoteCache && now() - quoteAt < CACHE_TTL_MS) {
       return quoteCache;
     }
-    const ticks = await client.fetchTicks(30);
+    const ticks = await client.fetchLatestTick();
     const points = Array.isArray(ticks?.points) ? ticks.points : [];
     const history = points.map((point) => ({
       price: Number(point.price),

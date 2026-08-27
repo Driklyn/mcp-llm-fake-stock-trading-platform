@@ -78,6 +78,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${apiBaseUrl}${path}`, init);
   } catch (error) {
+    if ((error as Error)?.name === "AbortError") throw error;
     throw new Error(
       `Could not reach ${apiBaseUrl}: ${(error as Error)?.message ?? error}`,
     );
@@ -116,13 +117,22 @@ export function newIdempotencyKey(): string {
   return `client-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export async function fetchPortfolio(): Promise<CloudPortfolio> {
-  return request<CloudPortfolio>("/api/v1/portfolio");
+export async function fetchPortfolio(
+  signal?: AbortSignal,
+): Promise<CloudPortfolio> {
+  return request<CloudPortfolio>("/api/v1/portfolio", { signal });
 }
 
-export async function fetchTicks(limit = 1): Promise<CloudTicks> {
-  const clamped = Math.min(960, Math.max(1, Math.floor(limit)));
-  return request<CloudTicks>(`/api/v1/ticks?limit=${clamped}`);
+export async function fetchTicks4h(
+  signal?: AbortSignal,
+): Promise<CloudTicks> {
+  return request<CloudTicks>("/api/v1/ticks/4h", { signal });
+}
+
+export async function fetchLatestTick(
+  signal?: AbortSignal,
+): Promise<CloudTicks> {
+  return request<CloudTicks>("/api/v1/ticks/latest", { signal });
 }
 
 export type CloudTradeResult = {

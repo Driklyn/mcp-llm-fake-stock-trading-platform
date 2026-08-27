@@ -19,8 +19,13 @@ output "cloudfront_domain_name" {
 }
 
 output "ticks_endpoint" {
-  description = "GET /api/v1/ticks through the CloudFront edge."
-  value       = "https://${aws_cloudfront_distribution.market_edge.domain_name}/api/v1/ticks"
+  description = "GET /api/v1/ticks/4h — last 4h of 15s ticks through the CloudFront edge."
+  value       = "https://${aws_cloudfront_distribution.market_edge.domain_name}/api/v1/ticks/4h"
+}
+
+output "latest_ticks_endpoint" {
+  description = "GET /api/v1/ticks/latest — most recent realized tick through the CloudFront edge."
+  value       = "https://${aws_cloudfront_distribution.market_edge.domain_name}/api/v1/ticks/latest"
 }
 
 output "portfolio_endpoint" {

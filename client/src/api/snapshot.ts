@@ -18,6 +18,46 @@ function round2(value: number): number {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
+/**
+ * Merge two CloudTicks payloads into one retained window: dedupes points by
+ * timestamp (a duplicate timestamp keeps the newer payload's price), sorts
+ * oldest-first, and keeps only the most recent 960 points so direct-mode
+ * refreshes append to the 4h window instead of replacing it.
+ */
+export function mergeCloudTicks(
+  previous: CloudTicks | null,
+  incoming: CloudTicks,
+): CloudTicks {
+  const MAX_POINTS = 960; // 4h of 15s ticks
+  const byTimestamp = new Map<number, { timestamp: number; price: number }>();
+  for (const point of [
+    ...(Array.isArray(previous?.points) ? previous.points : []),
+    ...(Array.isArray(incoming?.points) ? incoming.points : []),
+  ]) {
+    if (point == null) continue;
+    const timestamp = Number(point.timestamp);
+    if (!Number.isFinite(timestamp)) continue;
+    byTimestamp.set(timestamp, {
+      timestamp,
+      price: Number(point.price),
+    });
+  }
+  const points = [...byTimestamp.values()]
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .slice(-MAX_POINTS);
+
+  const oldest = points[0];
+  const newest = points[points.length - 1];
+  return {
+    symbol: incoming?.symbol ?? previous?.symbol ?? "FAKE",
+    generatedAt: incoming?.generatedAt ?? previous?.generatedAt ?? 0,
+    from: oldest?.timestamp ?? incoming?.from ?? 0,
+    to: newest?.timestamp ?? incoming?.to ?? 0,
+    count: points.length,
+    points,
+  };
+}
+
 export function toClientOrder(order: CloudOrder) {
   return {
     id: String(order.id),

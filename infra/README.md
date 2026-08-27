@@ -18,14 +18,15 @@ inside the AWS Always Free Tier.
 
 ## Architecture
 
-    viewers ─▶ CloudFront (14s edge cache on GET /api/v1/ticks)
+    viewers ─▶ CloudFront (14s edge cache on GET /api/v1/ticks/*)
                     │
                     ▼
             HTTP API Gateway
-              GET  /api/v1/ticks      → ticks-fetcher
-              POST /api/v1/ticks      → ticks-generator
-              POST /api/v1/trades     → trading-api
-              GET  /api/v1/portfolio  → trading-api
+              GET  /api/v1/ticks/4h      → ticks-fetcher
+              GET  /api/v1/ticks/latest  → ticks-fetcher
+              POST /api/v1/ticks         → ticks-generator
+              POST /api/v1/trades        → trading-api
+              GET  /api/v1/portfolio     → trading-api
                     │
         ┌───────────┼──────────────────┐
         ▼           ▼                  ▼
@@ -84,7 +85,8 @@ ticks-generator ticks-fetcher trading-api
 
 | Method | Route                           | Lambda          | Notes                                                                            |
 | ------ | ------------------------------- | --------------- | -------------------------------------------------------------------------------- |
-| GET    | /api/v1/ticks                   | ticks-fetcher   | `?limit=1..960` & `?from=<epoch>`; `timestamp <= now` gate; 14s edge cache       |
+| GET    | /api/v1/ticks/4h                | ticks-fetcher   | last 4h of 15s ticks (960 pts, oldest-first); `timestamp <= now` gate; 14s edge cache |
+| GET    | /api/v1/ticks/latest            | ticks-fetcher   | most recent realized tick; `timestamp <= now` gate; 14s edge cache                     |
 | POST   | /api/v1/ticks                   | ticks-generator | manual generation of the current minute's 4 slots                                |
 | POST   | /api/v1/trades                  | trading-api     | `{ symbol, side: BUY\|SELL, quantity, idempotencyKey? }`                         |
 | GET    | /api/v1/trades                  | trading-api     | recent trade history, `?limit=N`                                                 |
@@ -108,6 +110,10 @@ ticks-generator ticks-fetcher trading-api
   depend on.
 - The 4 pre-populated "future" slots of the current minute are hidden by the
   fetcher's `timestamp <= current server time` gate.
+- The ticks-fetcher resolves its window from the route (`/api/v1/ticks/4h` →
+  960 points, `/api/v1/ticks/latest` → 1 point) and ignores any user-supplied
+  `limit`/`from` query strings. The CloudFront ticks cache policy therefore
+  drops query strings from the cache key entirely.
 - DSQL connections use the PostgreSQL wire protocol on port 5432 with an IAM
   db-connect token (`generateDbConnectAdminAuthToken`); SSL is mandatory. The
   Lambda IAM roles carry `dsql:Connect` on the cluster ARN (NOT an HTTP Data

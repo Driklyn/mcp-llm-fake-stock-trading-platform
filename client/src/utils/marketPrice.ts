@@ -167,3 +167,28 @@ export function buildPriceSeries(
     }),
   );
 }
+
+export type RealizedTick = {
+  timestamp: number; // epoch seconds, snapped down to the current 15s block
+  price: number;
+};
+
+/**
+ * The last _realized_ tick at or before `nowSeconds`: the current 15-second
+ * block timestamp snapped DOWN (floor), priced deterministically — matching the
+ * ticks-fetcher's `timestamp <= now` gate exactly, so a locally-generated tick
+ * is bit-for-bit identical to what `GET /api/v1/ticks/latest` returns.
+ */
+export function latestRealizedTick(
+  nowSeconds: number,
+  params: MarketParams = {},
+): RealizedTick {
+  const now = Number(nowSeconds);
+  if (!Number.isFinite(now)) {
+    throw new TypeError(
+      "latestRealizedTick expects a finite timestamp in seconds.",
+    );
+  }
+  const timestamp = Math.floor(now / BLOCK_SECONDS) * BLOCK_SECONDS;
+  return { timestamp, price: getPriceAtTime(timestamp, params) };
+}

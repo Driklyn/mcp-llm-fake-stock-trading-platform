@@ -1,14 +1,17 @@
 /**
- * ticks-fetcher — GET /api/v1/ticks.
+ * ticks-fetcher — GET /api/v1/ticks/4h and GET /api/v1/ticks/latest.
  *
  * Reads realized ticks from the DynamoDB market_price_history table and hides
  * anything the ticks-generator pre-populated for the future: the query enforces
  * a strict timestamp gate (timestamp <= current server time), so the 0s/15s/30s/45s
  * slots of the current minute only appear once their time has arrived.
  *
- * Optional query string params (included in the CloudFront cache key):
- *   limit  max number of points to return, 1..960 (default 960 = 4h of 15s ticks)
- *   from   lower bound epoch-seconds (default: now - 4h)
+ * The window is resolved from the request path (event.rawPath); user-supplied
+ * limit/from query strings are ignored entirely:
+ *   /api/v1/ticks/latest → limit: 1
+ *   /api/v1/ticks/4h     → limit: 960, from: now − 4h
+ *   /api/v1/ticks        → same as /4h (backward-compatible default)
+ *   anything else        → 404
  *
  * Environment:
  *   MARKET_TABLE  default "market_price_history"
@@ -21,26 +24,27 @@ export const BLOCK_SECONDS = 15;
 export const DEFAULT_TABLE = "market_price_history";
 export const DEFAULT_SYMBOL = "FAKE";
 export const DEFAULT_HISTORY_LIMIT = 960; // 4h of 15s ticks
-export const MAX_HISTORY_LIMIT = 960;
 export const DEFAULT_HISTORY_WINDOW_SECONDS =
   DEFAULT_HISTORY_LIMIT * BLOCK_SECONDS; // 14400
 
-function clampInt(value, min, max, fallback) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(num)));
-}
-
-function parseQuery(event) {
-  const out = { ...(event?.queryStringParameters ?? {}) };
-  const raw = event?.rawQueryString ?? "";
-  for (const pair of raw.split("&")) {
-    if (!pair) continue;
-    const [key, value] = pair.split("=");
-    if (!key) continue;
-    out[decodeURIComponent(key)] = decodeURIComponent(value ?? "");
+/**
+ * Resolve the query window from the request path. Unknown routes return null
+ * (the handler answers 404). Query-string params are deliberately ignored.
+ */
+export function resolveWindow(event, nowSeconds) {
+  const rawPath = event?.rawPath ?? "";
+  if (rawPath.endsWith("/latest")) {
+    return { limit: 1, from: nowSeconds - DEFAULT_HISTORY_WINDOW_SECONDS };
   }
-  return out;
+  // /4h, the bare /api/v1/ticks, or a missing path all resolve to the full 4h
+  // window (960 points, oldest-first).
+  if (rawPath === "" || rawPath.endsWith("/4h") || rawPath.endsWith("/ticks")) {
+    return {
+      limit: DEFAULT_HISTORY_LIMIT,
+      from: nowSeconds - DEFAULT_HISTORY_WINDOW_SECONDS,
+    };
+  }
+  return null;
 }
 
 function apiResponse(statusCode, body) {
@@ -60,17 +64,14 @@ export async function handler(event = {}) {
   const symbol = process.env.MARKET_SYMBOL ?? DEFAULT_SYMBOL;
 
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const query = parseQuery(event);
-  const limit = clampInt(
-    query.limit,
-    1,
-    MAX_HISTORY_LIMIT,
-    DEFAULT_HISTORY_LIMIT,
-  );
-  const requestedFrom = Number(query.from);
-  const from = Number.isFinite(requestedFrom)
-    ? Math.max(0, Math.floor(requestedFrom))
-    : nowSeconds - DEFAULT_HISTORY_WINDOW_SECONDS;
+  const window = resolveWindow(event, nowSeconds);
+  if (!window) {
+    return apiResponse(404, {
+      ok: false,
+      error: `Unknown ticks route: ${event?.rawPath ?? "(no path)"}`,
+    });
+  }
+  const { limit, from } = window;
 
   const client = new DynamoDBClient({ region });
   const result = await client.send(

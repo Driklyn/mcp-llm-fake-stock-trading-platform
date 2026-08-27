@@ -47,7 +47,8 @@ stack (`infra/`) — the local server is a **stateless proxy** over
 
 The server listens on port 3001 and serves the REST, WebSocket, and MCP HTTP
 endpoints. Every account read and mutation is delegated to trading-api; the price
-feed comes from `GET /api/v1/ticks` and the quote/snapshot are cached for 15s.
+feed comes from `GET /api/v1/ticks/4h` (windowed history) and `GET /api/v1/ticks/latest`
+(current price), and the quote/snapshot are cached for 15s.
 
 ### Scripts
 
@@ -115,7 +116,7 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 
 - Single fake ticker: `FAKE`, seeded at $100 (Terraform `market_base_price`)
 - Starting cash from the deployed `account_start_cash` (Terraform variable, default $10,000)
-- Price updates every 15 seconds from the cloud ticks feed (`GET /api/v1/ticks`)
+- Price updates every 15 seconds from the cloud ticks feed (`GET /api/v1/ticks/latest`)
 - Cash transfers in and out (DSQL `transfers` ledger)
 - Market buys and sells (by share count or dollar amount) executed by trading-api
 - Limit and stop orders that trading-api fills reactively against the live price whenever a new tick arrives
@@ -143,6 +144,10 @@ What changes in direct mode:
 
 - The ledger loads via `GET /api/v1/portfolio` and polls every 15s; no
   WebSocket (the CloudFront HTTP distribution has none).
+- The 4h chart window loads from `GET /api/v1/ticks/4h` and refreshes append
+  `GET /api/v1/ticks/latest`. If either endpoint is unreachable, the
+  deterministic engine fills the gap with locally-generated ticks (identical
+  seed/params), so the chart never freezes.
 - The price chart stays deterministic/local — same engine as proxy mode.
 - Manual trading calls the REST mutations directly with per-request
   `idempotencyKey`s; large trades (10+ shares or $1,000+) confirm in-browser.

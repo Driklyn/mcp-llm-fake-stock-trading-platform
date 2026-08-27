@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
 import { ChartShell, Eyebrow, Stat, StatsGrid, sprinkles } from "ui";
 import {
   buildChartGeometry,
@@ -20,11 +27,12 @@ export default function MarketChart({
 }: MarketChartProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [hoverIndex, setHoverIndex] = useState(-1);
+  const [chartSize, setChartSize] = useState({ width: 320, height: 320 });
 
   const chartSeries = useMemo(() => buildChartSeries(points), [points]);
 
-  const chartWidth = canvasRef.current?.clientWidth || 500;
-  const chartHeight = canvasRef.current?.clientHeight || 420;
+  const chartWidth = chartSize.width;
+  const chartHeight = chartSize.height;
   const chartGeometry = useMemo(
     () => buildChartGeometry(chartSeries, chartWidth, chartHeight),
     [chartSeries, chartWidth, chartHeight],
@@ -50,15 +58,21 @@ export default function MarketChart({
     setHoverIndex(nearestPoint.index);
   };
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const shell = canvas?.parentElement ?? null;
     if (!shell || !canvas) return;
 
     const resizeCanvas = () => {
-      const width = Math.max(320, Math.round(shell.clientWidth));
-      const height = Math.max(320, Math.round(shell.clientHeight));
+      const width = Math.max(1, Math.round(shell.clientWidth));
+      const height = Math.max(1, Math.round(shell.clientHeight));
       const dpr = window.devicePixelRatio || 1;
+
+      setChartSize((previous) =>
+        previous.width === width && previous.height === height
+          ? previous
+          : { width, height },
+      );
 
       if (
         canvas.width !== Math.round(width * dpr) ||

@@ -83,8 +83,8 @@ async function request(path, { method = "GET", body, idempotencyKey } = {}) {
 export const fetchPortfolio = () => request("/api/v1/portfolio");
 export const fetchTrades = (limit = 50) =>
   request(`/api/v1/trades?limit=${limit}`);
-export const fetchTicks = (limit = 30) =>
-  request(`/api/v1/ticks?limit=${limit}`);
+export const fetchTicks4h = () => request("/api/v1/ticks/4h");
+export const fetchLatestTick = () => request("/api/v1/ticks/latest");
 export const fetchOrders = (status) =>
   request(
     `/api/v1/orders${status ? `?status=${encodeURIComponent(status)}` : ""}`,

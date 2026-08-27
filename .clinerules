@@ -18,8 +18,8 @@
 
 ### File-First Protocol & Editing Constraints
 
-- **No Multi-Batch or Large-Block Rewrites:** Never attempt to rewrite entire files or large multi-function blocks (>30 lines) at once. Split complex updates into multiple, targeted sequential edits to prevent token truncation.
-- **Surgical Search-and-Replace Only:** For existing files over 50 lines long, strictly use small, specific replace_in_file blocks targeting one precise function or 15-line block at a time. Do not resort to full-file rewrites.
+- **Efficient Grouped Edits:** Group all related changes within the same file into a single tool execution block. Do not split sequential or multi-line edits into separate back-to-back tool calls. Aim to get all edits for a single file approved in a single turn to minimize token context overhead.
+- **Surgical Block Replacement (No Full Rewrites):** Do not rewrite entire files or large, unaffected multi-function blocks (>50 lines) just to make minor edits. Use concise SEARCH/REPLACE blocks targeted strictly at the functions or blocks being modified.
 - **Handle Match Errors Cleanly:** If a search-and-replace block fails due to a whitespace or string match error, do not panic or loop. Immediately run read_file to capture exact indentation, then retry a smaller, exact match block.
 - Prioritize writing complete code files using file-writing tools only for _new_ files or very small files.
 - Verify your own code changes using the read_file tool to parse logic, syntax correctness, and structural parity across modules.

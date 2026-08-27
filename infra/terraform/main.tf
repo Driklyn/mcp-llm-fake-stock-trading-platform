@@ -5,7 +5,7 @@
 # subnets, route tables, internet gateways, or NAT Gateways anywhere in this
 # file — every resource talks over AWS-managed public endpoints.
 #
-#   viewers ──▶ CloudFront (14s edge cache on GET /api/v1/ticks)
+#   viewers ──▶ CloudFront (14s edge cache on GET /api/v1/ticks/*)
 #                   │
 #                   ▼
 #           HTTP API Gateway (versioned /api/v1 financial routes)
@@ -496,9 +496,15 @@ resource "aws_apigatewayv2_route" "ticks_generator_post" {
   target    = "integrations/${aws_apigatewayv2_integration.ticks_generator.id}"
 }
 
-resource "aws_apigatewayv2_route" "ticks_fetcher_get" {
+resource "aws_apigatewayv2_route" "ticks_fetcher_4h_get" {
   api_id    = aws_apigatewayv2_api.market_api.id
-  route_key = "GET /api/v1/ticks"
+  route_key = "GET /api/v1/ticks/4h"
+  target    = "integrations/${aws_apigatewayv2_integration.ticks_fetcher.id}"
+}
+
+resource "aws_apigatewayv2_route" "ticks_fetcher_latest_get" {
+  api_id    = aws_apigatewayv2_api.market_api.id
+  route_key = "GET /api/v1/ticks/latest"
   target    = "integrations/${aws_apigatewayv2_integration.ticks_fetcher.id}"
 }
 
@@ -576,12 +582,13 @@ resource "aws_lambda_permission" "trading_api_apigw" {
 # Cache edge layer — CloudFront in front of the API Gateway
 # ---------------------------------------------------------------------------
 
-# 14-second edge TTL for GET /api/v1/ticks. Query strings limit/from and the
-# Origin header are part of the cache key so per-request results and CORS
-# headers are never mixed across viewers.
+# 14-second edge TTL for GET /api/v1/ticks/*. Query strings are excluded from
+# the cache key (the fetcher resolves its window from the path and ignores
+# them); only the Origin header is kept so CORS headers are never mixed across
+# viewers.
 resource "aws_cloudfront_cache_policy" "ticks_cache" {
   name        = "market-ticks-cache-policy"
-  comment     = "14-second edge TTL for GET /api/v1/ticks"
+  comment     = "14-second edge TTL for GET /api/v1/ticks/*"
   min_ttl     = var.cloudfront_ticks_cache_ttl
   default_ttl = var.cloudfront_ticks_cache_ttl
   max_ttl     = var.cloudfront_ticks_cache_ttl
@@ -600,10 +607,7 @@ resource "aws_cloudfront_cache_policy" "ticks_cache" {
       }
     }
     query_strings_config {
-      query_string_behavior = "whitelist"
-      query_strings {
-        items = ["limit", "from"]
-      }
+      query_string_behavior = "none"
     }
   }
 }
@@ -632,7 +636,7 @@ resource "aws_cloudfront_cache_policy" "no_cache" {
 
 resource "aws_cloudfront_origin_request_policy" "market_api" {
   name    = "market-api-origin-request-policy"
-  comment = "Forward only Origin and limit/from to the API Gateway origin"
+  comment = "Forward only Origin and limit (trades need it) to the API Gateway origin"
 
   cookies_config {
     cookie_behavior = "none"
@@ -646,7 +650,7 @@ resource "aws_cloudfront_origin_request_policy" "market_api" {
   query_strings_config {
     query_string_behavior = "whitelist"
     query_strings {
-      items = ["limit", "from"]
+      items = ["limit"]
     }
   }
 }
@@ -678,10 +682,10 @@ resource "aws_cloudfront_distribution" "market_edge" {
     compress                 = true
   }
 
-  # GET /api/v1/ticks only: CloudFront caches only GET/HEAD, so POST requests
+  # GET /api/v1/ticks/* only: CloudFront caches only GET/HEAD, so POST requests
   # on this path still pass through to the origin untouched.
   ordered_cache_behavior {
-    path_pattern             = "/api/v1/ticks"
+    path_pattern             = "/api/v1/ticks/*"
     target_origin_id         = "market-api-gateway"
     viewer_protocol_policy   = "redirect-to-https"
     allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]

@@ -33,7 +33,7 @@ function stubClient(overrides = {}) {
         recentTransfers: [...portfolio.recentTransfers],
       };
     },
-    async fetchTicks() {
+    async fetchLatestTick() {
       return {
         symbol: "FAKE",
         points: [

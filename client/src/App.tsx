@@ -29,6 +29,7 @@ import {
   blockForTime,
   buildPriceSeries,
   getPriceAtTime,
+  latestRealizedTick,
   type MarketParams,
 } from "./utils/marketPrice";
 import {
@@ -38,13 +39,19 @@ import {
   wsUrl,
 } from "./config";
 import {
+  fetchLatestTick,
   fetchPortfolio,
-  fetchTicks,
+  fetchTicks4h,
   placeOrder as cloudPlaceOrder,
   postTrade,
   postTransfer,
+  type CloudPortfolio,
+  type CloudTicks,
 } from "./api/cloud";
-import { buildSnapshotFromCloud } from "./api/snapshot";
+import {
+  buildSnapshotFromCloud,
+  mergeCloudTicks,
+} from "./api/snapshot";
 
 type TradeResultPayload = AssistantPayload & {
   executedAmount?: number;
@@ -71,6 +78,9 @@ function App() {
     useState<AssistantPayload | null>(null);
   const [isChatWorking, setIsChatWorking] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
+  // Direct mode (GitHub Pages): accumulated 4h tick window. Refreshes append
+  // fresh ticks via mergeCloudTicks instead of replacing the whole window.
+  const directTicksRef = useRef<CloudTicks | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -103,24 +113,70 @@ function App() {
     );
   }, [marketParams, currentBlock]);
 
+  // Direct-mode helpers: deterministic local fallbacks when the cloud ticks
+  // endpoints are unreachable, plus the shared merge-then-render pipeline.
+  const localFallback4h = (nowSeconds: number): CloudTicks => {
+    const endBlock = Math.floor(nowSeconds / BLOCK_SECONDS) * BLOCK_SECONDS;
+    const points = buildPriceSeries(
+      endBlock - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
+      endBlock,
+      DEFAULT_PARAMS,
+    ).map((point) => ({
+      timestamp: Math.floor(point.timestamp / 1000),
+      price: point.price,
+    }));
+    return {
+      symbol: "FAKE",
+      generatedAt: nowSeconds,
+      from: points[0]?.timestamp ?? endBlock - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
+      to: points[points.length - 1]?.timestamp ?? endBlock,
+      count: points.length,
+      points,
+    };
+  };
+
+  const localFallbackLatest = (nowSeconds: number): CloudTicks => {
+    const point = latestRealizedTick(nowSeconds, DEFAULT_PARAMS);
+    return {
+      symbol: "FAKE",
+      generatedAt: nowSeconds,
+      from: point.timestamp,
+      to: point.timestamp,
+      count: 1,
+      points: [point],
+    };
+  };
+
+  const renderDirectSnapshot = (
+    portfolio: CloudPortfolio,
+    incoming: CloudTicks,
+  ) => {
+    const merged = mergeCloudTicks(directTicksRef.current, incoming);
+    directTicksRef.current = merged;
+    setSnapshot(buildSnapshotFromCloud(portfolio, merged, DEFAULT_PARAMS));
+    setMarketParams(DEFAULT_PARAMS);
+    setRefreshSeconds(15);
+  };
+
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
     let cancelled = false;
 
     if (isDirectMode) {
       // Direct mode (client-only / GitHub Pages): poll the CloudFront ledger
-      // and let the deterministic engine drive the price/chart locally.
-      // There is no WebSocket through the CloudFront HTTP distribution.
-      const directParams = DEFAULT_PARAMS;
+      // and merge fresh ticks into the retained 4h window. There is no
+      // WebSocket through the CloudFront HTTP distribution.
       const refreshSnapshot = async () => {
         try {
-          const [portfolio, ticks] = await Promise.all([
-            fetchPortfolio(),
-            fetchTicks(30),
-          ]);
-          if (cancelled) return;
-          setSnapshot(buildSnapshotFromCloud(portfolio, ticks, directParams));
-          setMarketParams(directParams);
-          setRefreshSeconds(15);
+          const portfolio = await fetchPortfolio(signal);
+          let incoming: CloudTicks;
+          try {
+            incoming = await fetchLatestTick(signal);
+          } catch {
+            incoming = localFallbackLatest(Math.floor(Date.now() / 1000));
+          }
+          if (!cancelled) renderDirectSnapshot(portfolio, incoming);
         } catch (error) {
           if (!cancelled) {
             setMessage("Market connection is reconnecting...");
@@ -129,31 +185,44 @@ function App() {
         }
       };
 
-      refreshSnapshot();
+      const loadInitial = async () => {
+        try {
+          const portfolio = await fetchPortfolio(signal);
+          let incoming: CloudTicks;
+          try {
+            incoming = await fetchTicks4h(signal);
+          } catch {
+            incoming = localFallback4h(Math.floor(Date.now() / 1000));
+          }
+          if (!cancelled) renderDirectSnapshot(portfolio, incoming);
+        } catch (error) {
+          if (!cancelled) {
+            setMessage("Market connection is reconnecting...");
+            setSnapshot((previous) => previous ?? null);
+          }
+        }
+      };
+
+      loadInitial();
       const pollId = setInterval(refreshSnapshot, 15_000);
       return () => {
         cancelled = true;
+        controller.abort();
         clearInterval(pollId);
       };
     }
 
     const loadInitialSnapshot = async () => {
       try {
-        const response = await fetch(`${apiBaseUrl}/api/snapshot`);
+        const response = await fetch(`${apiBaseUrl}/api/snapshot`, { signal });
         if (!response.ok) {
           throw new Error("Snapshot unavailable");
         }
 
-        const data: {
-          snapshot?: MarketSnapshot;
-          marketParams?: MarketParams;
-        } = await response.json();
-        const nextSnapshot = data?.snapshot ?? (data as MarketSnapshot);
-        if (!cancelled && nextSnapshot) {
-          setSnapshot(nextSnapshot);
-          setMarketParams(
-            data?.marketParams ?? nextSnapshot?.marketParams ?? null,
-          );
+        const data: MarketSnapshot = await response.json();
+        if (!cancelled && data) {
+          setSnapshot(data);
+          setMarketParams(data.marketParams ?? null);
           setRefreshSeconds(15);
         }
       } catch (err) {
@@ -221,6 +290,7 @@ function App() {
 
     return () => {
       cancelled = true;
+      controller.abort();
       ws.close();
     };
   }, []);
@@ -379,15 +449,15 @@ function App() {
 
   const refreshSnapshot = async () => {
     if (!isDirectMode) return;
-    const directParams = DEFAULT_PARAMS;
     try {
-      const [portfolio, ticks] = await Promise.all([
-        fetchPortfolio(),
-        fetchTicks(30),
-      ]);
-      setSnapshot(buildSnapshotFromCloud(portfolio, ticks, directParams));
-      setMarketParams(directParams);
-      setRefreshSeconds(15);
+      const portfolio = await fetchPortfolio();
+      let incoming: CloudTicks;
+      try {
+        incoming = await fetchLatestTick();
+      } catch {
+        incoming = localFallbackLatest(Math.floor(Date.now() / 1000));
+      }
+      renderDirectSnapshot(portfolio, incoming);
     } catch {
       // Keep the last known snapshot; the caller already surfaced the result.
     }
