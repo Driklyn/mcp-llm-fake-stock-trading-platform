@@ -1,24 +1,27 @@
-# General Rules
+### General Rules
 
 - Don't try to build the client/server after changes.
 - When adding time durations don't add a space between the number and unit (i.e. 12h, NOT 12 h).
 
-# Token Management Rules
+### Token Management Rules
 
 - Never use search_files or grep across the entire codebase unless explicitly asked.
 - When creating multiple files, always update the primary entry point (e.g. App.jsx) progressively rather than waiting until the end.
 - If a file read loop takes more than 3 turns, stop and ask the user for direct file paths.
 - Never ask to access the internet to view documentation. Instead, ask whatever question you need answered and wait for the user to provide one.
 
-# Windows Environment & Terminal Constraints
+### Windows Environment & Terminal Constraints
 
 - Local terminal shell integration is structurally unavailable on this machine.
 - DO NOT attempt to diagnose, debug, or run execution workarounds for terminal tracking, profile configurations, or PowerShell execution policies.
 - Every terminal command you execute will report back with a false-negative status ("success": false / Exit Code 1). Expect this and do not panic.
 
-# File-First Protocol
+### File-First Protocol & Editing Constraints
 
-- Prioritize writing complete code files using file-writing tools.
-- Verify your own code changes using the `read_file` tool to parse logic, syntax correctness, and structural parity across modules.
+- **No Multi-Batch or Large-Block Rewrites:** Never attempt to rewrite entire files or large multi-function blocks (>30 lines) at once. Split complex updates into multiple, targeted sequential edits to prevent token truncation.
+- **Surgical Search-and-Replace Only:** For existing files over 50 lines long, strictly use small, specific replace_in_file blocks targeting one precise function or 15-line block at a time. Do not resort to full-file rewrites.
+- **Handle Match Errors Cleanly:** If a search-and-replace block fails due to a whitespace or string match error, do not panic or loop. Immediately run read_file to capture exact indentation, then retry a smaller, exact match block.
+- Prioritize writing complete code files using file-writing tools only for _new_ files or very small files.
+- Verify your own code changes using the read_file tool to parse logic, syntax correctness, and structural parity across modules.
 - DO NOT run iterative diagnostic terminal test scripts, npm watch scripts, or interactive validation loops.
-- When a coding task or component step is complete, explicitly pause and prompt the user to manually run the validation commands (e.g., `npm test`, `npm run build`) in their host terminal. Rely on the user's manual terminal output feedback to proceed.
+- When a coding task or component step is complete, explicitly pause and prompt the user to manually run the validation commands (e.g., npm test, npm run build) in their host terminal. Rely on the user's manual terminal output feedback to proceed.

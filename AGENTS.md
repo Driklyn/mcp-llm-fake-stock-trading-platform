@@ -1,12 +1,12 @@
-# General rules
+### General Rules
 
 - Don't try to build the client/server after changes.
 
-# TypeScript
+### TypeScript
 
 - Use type instead of interfaces
 
-# Components
+### Components
 
 - Components are built using Vanilla Extract (`@vanilla-extract/css`)
 - Avoid using the `style` property on JSX components, instead use the `sprinkles` design system values from the `ui` package whenever possible, such as via:

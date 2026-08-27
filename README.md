@@ -126,12 +126,32 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 
 ## Deployment Notes
 
-### GitHub Pages
+### GitHub Pages (client-only, direct to CloudFront)
 
-- Host the Vite static client on GitHub Pages.
-- Run the Node server (REST + WebSocket + MCP) on a separate public backend.
-- The client currently hardcodes `http://localhost:3001`; extract it into an
-  environment variable and point it at the deployed backend before shipping.
+The client can run as a fully static site with no Node backend: build it with
+the CloudFront base URL baked in, and the browser calls the `/api/v1/*` REST API
+directly (CORS is already enabled on the API Gateway and Lambdas).
+
+    VITE_API_BASE_URL=https://<cloudfront-domain> npm run build
+
+The static output lands in `client/dist`. Host it anywhere — or push to GitHub
+and let `.github/workflows/deploy-pages.yml` build with the `CLOUDFRONT_URL`
+repository secret and deploy automatically (enable Pages → "GitHub Actions" in
+the repo settings first).
+
+What changes in direct mode:
+
+- The ledger loads via `GET /api/v1/portfolio` and polls every 15s; no
+  WebSocket (the CloudFront HTTP distribution has none).
+- The price chart stays deterministic/local — same engine as proxy mode.
+- Manual trading calls the REST mutations directly with per-request
+  `idempotencyKey`s; large trades (10+ shares or $1,000+) confirm in-browser.
+- Chat posts to `<base>/api/v1/assistant` — forward-compatible with the planned
+  Lambda-hosted MCP + OpenRouter assistant. Until that Lambda exists, chat
+  surfaces the API's 404.
+
+Keep developing LLM/MCP features locally as before: set `TRADING_API_URL`, run
+`npm run dev:server`, then `npm run dev` (leave `VITE_API_BASE_URL` unset).
 
 ### AWS (free-tier-friendly)
 

@@ -4,4 +4,6 @@ client/dist
 server/.cache
 npm-debug.log*
 .DS_Store
+.env*
+!.env.example
 TODO.txt

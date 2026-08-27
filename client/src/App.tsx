@@ -18,15 +18,33 @@ import type {
   AssistantPayload,
   ChatMessage,
   MarketSnapshot,
+  OrderType,
   SocketMessage,
+  TradeSide,
+  TransferDirection,
 } from "./types";
 import {
   BLOCK_SECONDS,
+  DEFAULT_PARAMS,
   blockForTime,
   buildPriceSeries,
   getPriceAtTime,
   type MarketParams,
 } from "./utils/marketPrice";
+import {
+  apiBaseUrl,
+  assistantUrl,
+  isDirectMode,
+  wsUrl,
+} from "./config";
+import {
+  fetchPortfolio,
+  fetchTicks,
+  placeOrder as cloudPlaceOrder,
+  postTrade,
+  postTransfer,
+} from "./api/cloud";
+import { buildSnapshotFromCloud } from "./api/snapshot";
 
 type TradeResultPayload = AssistantPayload & {
   executedAmount?: number;
@@ -88,9 +106,40 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
+    if (isDirectMode) {
+      // Direct mode (client-only / GitHub Pages): poll the CloudFront ledger
+      // and let the deterministic engine drive the price/chart locally.
+      // There is no WebSocket through the CloudFront HTTP distribution.
+      const directParams = DEFAULT_PARAMS;
+      const refreshSnapshot = async () => {
+        try {
+          const [portfolio, ticks] = await Promise.all([
+            fetchPortfolio(),
+            fetchTicks(30),
+          ]);
+          if (cancelled) return;
+          setSnapshot(buildSnapshotFromCloud(portfolio, ticks, directParams));
+          setMarketParams(directParams);
+          setRefreshSeconds(15);
+        } catch (error) {
+          if (!cancelled) {
+            setMessage("Market connection is reconnecting...");
+            setSnapshot((previous) => previous ?? null);
+          }
+        }
+      };
+
+      refreshSnapshot();
+      const pollId = setInterval(refreshSnapshot, 15_000);
+      return () => {
+        cancelled = true;
+        clearInterval(pollId);
+      };
+    }
+
     const loadInitialSnapshot = async () => {
       try {
-        const response = await fetch("http://localhost:3001/api/snapshot");
+        const response = await fetch(`${apiBaseUrl}/api/snapshot`);
         if (!response.ok) {
           throw new Error("Snapshot unavailable");
         }
@@ -117,7 +166,7 @@ function App() {
 
     loadInitialSnapshot();
 
-    const ws = new WebSocket("ws://localhost:3001");
+    const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
 
     ws.onmessage = (event) => {
@@ -192,14 +241,11 @@ function App() {
     const text = currentInput;
 
     try {
-      const assistantResponse = await fetch(
-        "http://localhost:3001/api/assistant",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text }),
-        },
-      );
+      const assistantResponse = await fetch(assistantUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
 
       const assistantData: {
         text?: string;
@@ -264,7 +310,7 @@ function App() {
       ]);
 
       const confirmationId = pendingConfirmation?.confirmationId;
-      const res = await fetch("http://localhost:3001/api/assistant", {
+      const res = await fetch(assistantUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "confirm", confirmationId }),
@@ -300,7 +346,7 @@ function App() {
     setIsChatWorking(true);
     try {
       const confirmationId = pendingConfirmation?.confirmationId;
-      const res = await fetch("http://localhost:3001/api/assistant", {
+      const res = await fetch(assistantUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "cancel", confirmationId }),
@@ -331,6 +377,138 @@ function App() {
     }
   };
 
+  const refreshSnapshot = async () => {
+    if (!isDirectMode) return;
+    const directParams = DEFAULT_PARAMS;
+    try {
+      const [portfolio, ticks] = await Promise.all([
+        fetchPortfolio(),
+        fetchTicks(30),
+      ]);
+      setSnapshot(buildSnapshotFromCloud(portfolio, ticks, directParams));
+      setMarketParams(directParams);
+      setRefreshSeconds(15);
+    } catch {
+      // Keep the last known snapshot; the caller already surfaced the result.
+    }
+  };
+
+  const handleManualTrade = async (side: TradeSide, quantity: number) => {
+    const socket = socketRef.current;
+
+    if (isDirectMode) {
+      const tradeValue = quantity * (livePrice ?? 0);
+      if (
+        quantity >= 10 ||
+        (Number.isFinite(tradeValue) && tradeValue >= 1000)
+      ) {
+        const confirmed = window.confirm(
+          `This ${side} order is worth $${tradeValue.toFixed(2)} at the current price. Confirm before placing it?`,
+        );
+        if (!confirmed) {
+          setMessage("Trade cancelled.");
+          return;
+        }
+      }
+      try {
+        const result = await postTrade(
+          side.toUpperCase() as "BUY" | "SELL",
+          quantity,
+        );
+        setMessage(result?.ok ? "Trade executed successfully" : "Trade failed");
+        await refreshSnapshot();
+      } catch (error) {
+        setMessage((error as Error)?.message ?? "Trade failed");
+      }
+      return;
+    }
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setMessage("Market connection is reconnecting...");
+      return;
+    }
+    socket.send(JSON.stringify({ type: side, quantity }));
+  };
+
+  const handleManualPlaceOrder = async (
+    orderType: OrderType,
+    side: TradeSide,
+    quantity: number,
+    price: number,
+  ) => {
+    const socket = socketRef.current;
+
+    if (isDirectMode) {
+      const tradeValue = quantity * (livePrice ?? 0);
+      if (
+        quantity >= 10 ||
+        (Number.isFinite(tradeValue) && tradeValue >= 1000)
+      ) {
+        const confirmed = window.confirm(
+          `This ${orderType} ${side} order is worth $${tradeValue.toFixed(2)} at the current price. Confirm before placing it?`,
+        );
+        if (!confirmed) {
+          setMessage("Order cancelled.");
+          return;
+        }
+      }
+      try {
+        await cloudPlaceOrder(
+          side.toUpperCase() as "BUY" | "SELL",
+          orderType,
+          quantity,
+          price,
+        );
+        setMessage(
+          `Placed ${orderType} ${side} order for ${quantity} shares at $${price.toFixed(2)}.`,
+        );
+        await refreshSnapshot();
+      } catch (error) {
+        setMessage((error as Error)?.message ?? "Failed to place order");
+      }
+      return;
+    }
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setMessage("Market connection is reconnecting...");
+      return;
+    }
+    socket.send(
+      JSON.stringify({ type: "place_order", orderType, side, quantity, price }),
+    );
+  };
+
+  const handleManualTransfer = async (
+    direction: TransferDirection,
+    amount: number,
+  ) => {
+    const socket = socketRef.current;
+    const signedAmount = direction === "deposit" ? amount : -amount;
+
+    if (isDirectMode) {
+      try {
+        const result = await postTransfer(signedAmount);
+        setMessage(
+          result?.ok
+            ? direction === "deposit"
+              ? "Deposit completed"
+              : "Withdrawal completed"
+            : "Transfer failed",
+        );
+        await refreshSnapshot();
+      } catch (error) {
+        setMessage((error as Error)?.message ?? "Transfer failed");
+      }
+      return;
+    }
+
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      setMessage("Market connection is reconnecting...");
+      return;
+    }
+    socket.send(JSON.stringify({ type: "transfer", amount: signedAmount }));
+  };
+
   const currentSnapshot = snapshot;
   const transactions: Transaction[] = currentSnapshot?.transactions ?? [];
 
@@ -350,8 +528,10 @@ function App() {
   const manualTabContent = (
     <ManualTradingPanel
       message={message}
-      socketRef={socketRef}
       onMessageChange={setMessage}
+      onTrade={handleManualTrade}
+      onPlaceOrder={handleManualPlaceOrder}
+      onTransfer={handleManualTransfer}
     />
   );
 
