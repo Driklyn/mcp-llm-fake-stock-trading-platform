@@ -6,7 +6,7 @@ import {
   normalizeTradeQuantity,
   parseToolPlan,
   requiresConfirmationForTrade,
-} from "../src/llm/assistant.js";
+} from "../src/llm.js";
 
 test("buy intent falls back to buy_stock with a quantity", () => {
   const plan = buildTradePlan("buy 3 shares", { allowNetwork: false });

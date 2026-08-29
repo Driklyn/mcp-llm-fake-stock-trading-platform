@@ -1,9 +1,10 @@
 /**
  * HTTP client for the deployed trading-api (infra/lambdas/trading-api).
  *
- * The local server is a stateless proxy over the cloud ledger: every account
- * read and mutation is delegated here, to the base URL in TRADING_API_URL (the
- * CloudFront / API Gateway base, e.g. https://dxxxxxxx.cloudfront.net).
+ * The chat assistant (and the dev server that hosts it) is a stateless proxy
+ * over the cloud ledger: every account read and mutation is delegated here, to
+ * the base URL in TRADING_API_URL (the CloudFront / API Gateway base, e.g.
+ * https://dxxxxxxx.cloudfront.net).
  *
  * Mutations carry a fresh UUID `idempotencyKey` so an ambiguous timeout can be
  * retried safely — trading-api replays the stored result for a duplicate key
@@ -83,7 +84,6 @@ async function request(path, { method = "GET", body, idempotencyKey } = {}) {
 export const fetchPortfolio = () => request("/api/v1/portfolio");
 export const fetchTrades = (limit = 50) =>
   request(`/api/v1/trades?limit=${limit}`);
-export const fetchTicks4h = () => request("/api/v1/ticks/4h");
 export const fetchLatestTick = () => request("/api/v1/ticks/latest");
 export const fetchOrders = (status) =>
   request(

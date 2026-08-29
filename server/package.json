@@ -10,7 +10,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "chat-assistant": "*",
     "express": "^4.21.2",
     "ws": "^8.18.0"
+  },
+  "dependenciesMeta": {
+    "chat-assistant": {
+      "workspace": true
+    }
   }
 }

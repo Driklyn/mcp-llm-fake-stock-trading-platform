@@ -1,0 +1,28 @@
+{
+  "name": "assistant",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.mjs",
+  "description": "AWS Lambda hosting the shared chat assistant (POST /api/v1/assistant). Vite bundles the adapter plus the chat-assistant workspace package and @aws-sdk into a single self-contained dist/index.mjs that Terraform zips.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "vite build",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1117.0",
+    "@aws-sdk/client-lambda": "^3.1117.0",
+    "chat-assistant": "*"
+  },
+  "dependenciesMeta": {
+    "chat-assistant": {
+      "workspace": true
+    }
+  },
+  "devDependencies": {
+    "vite": "^8.2.1"
+  }
+}

@@ -1,7 +1,13 @@
 /**
- * Typed REST client for the serverless market API (infra/) served through
- * CloudFront. Used by the client in "direct" mode (GitHub Pages build) to hit
- * the `/api/v1/*` endpoints directly — no Node proxy server required.
+ * Typed REST client for the serverless market API (infra/). Used by the client
+ * in "direct" mode (GitHub Pages build) to hit the `/api/v1/*` endpoints
+ * directly — no Node proxy server required.
+ *
+ * Dual-endpoint routing: GET /api/v1/ticks/* goes through the CloudFront edge
+ * (cdnBaseUrl — the 14s cache shields the 1-RCU DynamoDB table), while every
+ * dynamic route (portfolio, trades, orders, transfers) hits the HTTP API
+ * Gateway directly (apiBaseUrl) to fix CORS and enable zero-buffered LLM
+ * streaming.
  *
  * CORS is already configured end-to-end: API Gateway allows `*` origins and
  * both Lambdas return `Access-Control-Allow-Origin: *`.
@@ -10,7 +16,7 @@
  * so an ambiguous timeout can be retried safely — the ledger dedupes replays.
  */
 
-import { apiBaseUrl } from "../config";
+import { apiBaseUrl, cdnBaseUrl } from "../config";
 
 export type CloudHolding = {
   symbol: string;
@@ -73,14 +79,18 @@ export type CloudTicks = {
   points: Array<{ timestamp: number; price: number }>;
 };
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+async function request<T>(
+  baseUrl: string,
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${apiBaseUrl}${path}`, init);
+    response = await fetch(`${baseUrl}${path}`, init);
   } catch (error) {
     if ((error as Error)?.name === "AbortError") throw error;
     throw new Error(
-      `Could not reach ${apiBaseUrl}: ${(error as Error)?.message ?? error}`,
+      `Could not reach ${baseUrl}: ${(error as Error)?.message ?? error}`,
     );
   }
 
@@ -120,19 +130,19 @@ export function newIdempotencyKey(): string {
 export async function fetchPortfolio(
   signal?: AbortSignal,
 ): Promise<CloudPortfolio> {
-  return request<CloudPortfolio>("/api/v1/portfolio", { signal });
+  return request<CloudPortfolio>(apiBaseUrl, "/api/v1/portfolio", { signal });
 }
 
 export async function fetchTicks4h(
   signal?: AbortSignal,
 ): Promise<CloudTicks> {
-  return request<CloudTicks>("/api/v1/ticks/4h", { signal });
+  return request<CloudTicks>(cdnBaseUrl, "/api/v1/ticks/4h", { signal });
 }
 
 export async function fetchLatestTick(
   signal?: AbortSignal,
 ): Promise<CloudTicks> {
-  return request<CloudTicks>("/api/v1/ticks/latest", { signal });
+  return request<CloudTicks>(cdnBaseUrl, "/api/v1/ticks/latest", { signal });
 }
 
 export type CloudTradeResult = {
@@ -153,6 +163,7 @@ export async function postTrade(
   quantity: number,
 ): Promise<CloudTradeResult> {
   return request<CloudTradeResult>(
+    apiBaseUrl,
     "/api/v1/trades",
     jsonInit("POST", {
       symbol: "FAKE",
@@ -175,6 +186,7 @@ export async function postTransfer(
   amount: number,
 ): Promise<CloudTransferResult> {
   return request<CloudTransferResult>(
+    apiBaseUrl,
     "/api/v1/transfers",
     jsonInit("POST", { amount, idempotencyKey: newIdempotencyKey() }),
   );
@@ -192,6 +204,7 @@ export async function placeOrder(
   price: number,
 ): Promise<CloudOrderResult> {
   return request<CloudOrderResult>(
+    apiBaseUrl,
     "/api/v1/orders",
     jsonInit("POST", {
       symbol: "FAKE",
@@ -208,6 +221,7 @@ export async function cancelOrder(
   orderId: number | string,
 ): Promise<CloudOrderResult> {
   return request<CloudOrderResult>(
+    apiBaseUrl,
     `/api/v1/orders/${encodeURIComponent(String(orderId))}/cancel`,
     jsonInit("POST", {}),
   );

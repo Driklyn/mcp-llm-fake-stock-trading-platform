@@ -2,7 +2,7 @@ import * as z from "zod";
 import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import account from "../trading/account.js";
+import { account } from "chat-assistant";
 
 /**
  * MCP tool layer over the account service (which proxies trading-api). The

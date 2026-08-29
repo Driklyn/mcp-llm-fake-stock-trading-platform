@@ -13,7 +13,8 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 - Market orders plus limit and stop orders that execute when the price crosses the trigger
 - Large-trade confirmation flow (10+ shares or $1,000+ value) across chat, WebSocket, and MCP
 - MCP server (stdio + streamable HTTP) exposing 8 trading tools
-- Deterministic natural-language intent parser, optionally backed by a local Ollama model
+- Deterministic natural-language intent parser, optionally backed by a local Ollama
+  model or an OpenAI-compatible LLM (e.g. OpenRouter free tier)
 - Account ledger held in Aurora DSQL by the serverless `infra/` stack (`trading-api`);
   the local server is a stateless proxy over it
 - Canvas-based price chart with chart-data processing in a Web Worker
@@ -23,11 +24,12 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 
 This project is an npm workspaces monorepo:
 
-| Package  | Path      | Description                                                                                |
-| -------- | --------- | ------------------------------------------------------------------------------------------ |
-| `server` | `server/` | Express + WebSocket proxy over the deployed `trading-api` ledger, MCP layer, LLM assistant |
-| `client` | `client/` | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)            |
-| `ui`     | `ui/`     | Shared React component library and design tokens built with Vanilla Extract                |
+| Package         | Path                  | Description                                                                                       |
+| --------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
+| `server`        | `server/`             | Express + WebSocket proxy over the deployed `trading-api` ledger, MCP layer, chat assistant route |
+| `client`        | `client/`             | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)                    |
+| `ui`            | `ui/`                 | Shared React component library and design tokens built with Vanilla Extract                        |
+| `chat-assistant`| `chat-assistant/`     | Host-agnostic chat assistant (LLM planner, tool execution, pending confirmations) shared by the dev server and the production Lambda |
 
 ## Local Development
 
@@ -52,30 +54,41 @@ feed comes from `GET /api/v1/ticks/4h` (windowed history) and `GET /api/v1/ticks
 
 ### Scripts
 
-| Script                                 | Description                               |
-| -------------------------------------- | ----------------------------------------- |
-| `npm run dev`                          | Start the Vite client dev server          |
-| `npm run dev:server`                   | Start the market / WebSocket / API server |
-| `npm run build`                        | Build the client for production           |
-| `npm test`                             | Run the server test suite (`node --test`) |
-| `npm run mcp --workspace server`       | Run the MCP server over stdio             |
-| `npm run typecheck --workspace client` | Type-check the client                     |
+| Script                                 | Description                                          |
+| -------------------------------------- | ---------------------------------------------------- |
+| `npm run dev`                          | Start the Vite client dev server                     |
+| `npm run dev:server`                   | Start the market / WebSocket / API server            |
+| `npm run build`                        | Build the client for production                      |
+| `npm run build:assistant`              | Bundle the assistant Lambda into `assistant/dist`    |
+| `npm test`                             | Run server + chat-assistant + assistant Lambda tests |
+| `npm run mcp --workspace server`       | Run the MCP server over stdio                        |
+| `npm run typecheck --workspace client` | Type-check the client                                |
 
 ## Chat Assistant (Optional LLM)
 
-The `POST /api/assistant` endpoint turns natural-language trading requests into tool
-calls. A deterministic intent parser always produces a plan first; if a local Ollama
-instance is available, the request is also sent to the LLM as a JSON tool-plan prompt,
-and the two plans are reconciled.
+The chat assistant turns natural-language trading requests into tool calls. A
+deterministic intent parser always produces a plan first; if an LLM is
+configured, the request is also sent as a JSON tool-plan prompt and the two
+plans are reconciled. Safety: the deterministic plan wins when the LLM flips a
+buy into a sell (or vice versa), turns a conditional order into a market order,
+or fabricates intent.
 
-- Model: `llama3.1:8b` by default
-- Endpoint: `OLLAMA_BASE_URL` (defaults to `http://localhost:11434/api`)
-- Safety: the deterministic plan wins when the LLM flips a buy into a sell (or vice
-  versa), turns a conditional order into a market order, or fabricates intent
+One shared package (`chat-assistant/`) powers both hosts:
+
+- **Local dev** — `POST /api/assistant` on the Node server (port 3001), with a
+  local Ollama endpoint. Model: `llama3.1:8b` by default; `OLLAMA_BASE_URL`
+  defaults to `http://localhost:11434/api`.
+- **Production** — `POST /api/v1/assistant` on the deployed API Gateway, backed
+  by the `assistant` Lambda. It targets an OpenAI-compatible endpoint (e.g.
+  OpenRouter) configured through the Terraform `assistant_llm_*` variables,
+  stores pending confirmations in a TTL-expiring DynamoDB table, and invokes
+  `trading-api` / `ticks-fetcher` directly with `@aws-sdk/client-lambda`
+  (no CloudFront round-trip inside the stack).
 
 Supported intents: portfolio snapshots, price quotes, buying/selling shares (by
-quantity or dollar amount), limit and stop orders, cash deposits/withdrawals, and
-listing or canceling orders. Large trades return a confirmation prompt in the chat UI.
+quantity or dollar amount), limit and stop orders, cash deposits/withdrawals,
+and listing or canceling orders. Large trades return a confirmation prompt in
+the chat UI (stored in-memory in dev, in DynamoDB in production).
 
 ## MCP Server
 
@@ -127,17 +140,20 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 
 ## Deployment Notes
 
-### GitHub Pages (client-only, direct to CloudFront)
+### GitHub Pages (client-only, dual endpoints)
 
 The client can run as a fully static site with no Node backend: build it with
-the CloudFront base URL baked in, and the browser calls the `/api/v1/*` REST API
-directly (CORS is already enabled on the API Gateway and Lambdas).
+both base URLs baked in — the CloudFront domain for tick reads and the HTTP API
+Gateway URL for everything else (CORS is already enabled on the API Gateway and
+Lambdas).
 
-    VITE_API_BASE_URL=https://<cloudfront-domain> npm run build
+    VITE_CDN_BASE_URL=https://<cloudfront-domain> \
+    VITE_API_BASE_URL=https://<api-gateway-domain> npm run build
 
 The static output lands in `client/dist`. Host it anywhere — or push to GitHub
-and let `.github/workflows/deploy-pages.yml` build with the `CLOUDFRONT_URL`
-repository secret and deploy automatically (enable Pages → "GitHub Actions" in
+and let `.github/workflows/deploy-pages.yml` build with the `CLOUDFRONT_URL` and
+`API_GATEWAY_URL` repository secrets and deploy automatically (enable Pages →
+"GitHub Actions" in
 the repo settings first).
 
 What changes in direct mode:
@@ -151,18 +167,19 @@ What changes in direct mode:
 - The price chart stays deterministic/local — same engine as proxy mode.
 - Manual trading calls the REST mutations directly with per-request
   `idempotencyKey`s; large trades (10+ shares or $1,000+) confirm in-browser.
-- Chat posts to `<base>/api/v1/assistant` — forward-compatible with the planned
-  Lambda-hosted MCP + OpenRouter assistant. Until that Lambda exists, chat
-  surfaces the API's 404.
+- Chat posts to `<base>/api/v1/assistant` — served by the deployed `assistant`
+  Lambda. The deterministic parser always works; the OpenRouter LLM is optional
+  via the `assistant_llm_*` Terraform variables.
 
 Keep developing LLM/MCP features locally as before: set `TRADING_API_URL`, run
-`npm run dev:server`, then `npm run dev` (leave `VITE_API_BASE_URL` unset).
+`npm run dev:server`, then `npm run dev` (leave both `VITE_API_BASE_URL` and `VITE_CDN_BASE_URL` unset).
 
 ### AWS (free-tier-friendly)
 
-- The full ledger, price feed, and trading API live in the serverless `infra/`
-  stack (see `infra/README.md`): Aurora DSQL + DynamoDB + API Gateway +
-  CloudFront + 4 Lambdas + EventBridge schedules + DynamoDB Streams, all inside the free tier.
+- The full ledger, price feed, trading API, and chat assistant live in the
+  serverless `infra/` stack (see `infra/README.md`): Aurora DSQL + DynamoDB
+  (price history + pending confirmations) + API Gateway + CloudFront + 5
+  Lambdas + EventBridge schedules + DynamoDB Streams, all inside the free tier.
 - Run the Node proxy server anywhere that can reach the CloudFront URL
   (`TRADING_API_URL`), or serve the client directly from CloudFront as well.
 - Use HTTPS and a public WebSocket endpoint for the live market feed when

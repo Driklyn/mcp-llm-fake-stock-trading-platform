@@ -30,13 +30,18 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Build the client in "direct" mode: bake the CloudFront base URL into
-      # the bundle so it calls /api/v1/* straight from the browser. Set the
-      # CLOUDFRONT_URL secret in the repo settings to your CloudFront domain.
-      - name: Build client (direct CloudFront mode)
+      # Build the client in "direct" mode: bake both base URLs into the bundle.
+      # Ticks reads (GET /api/v1/ticks/*) go through the CloudFront distribution
+      # (CLOUDFRONT_URL secret — the 14s edge cache protects the 1-RCU DynamoDB
+      # table), while all dynamic routes (portfolio, trades, orders, transfers,
+      # assistant) hit the HTTP API Gateway directly (API_GATEWAY_URL secret) to
+      # fix CORS and allow zero-buffered LLM streaming. Set both secrets in the
+      # repo settings.
+      - name: Build client (direct CloudFront + API Gateway mode)
         run: npm run build --workspace client
         env:
-          VITE_API_BASE_URL: ${{ secrets.CLOUDFRONT_URL }}
+          VITE_CDN_BASE_URL: ${{ secrets.CLOUDFRONT_URL }}
+          VITE_API_BASE_URL: ${{ secrets.API_GATEWAY_URL }}
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

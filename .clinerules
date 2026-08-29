@@ -21,6 +21,7 @@
 - **Efficient Grouped Edits:** Group all related changes within the same file into a single tool execution block. Do not split sequential or multi-line edits into separate back-to-back tool calls. Aim to get all edits for a single file approved in a single turn to minimize token context overhead.
 - **Surgical Block Replacement (No Full Rewrites):** Do not rewrite entire files or large, unaffected multi-function blocks (>50 lines) just to make minor edits. Use concise SEARCH/REPLACE blocks targeted strictly at the functions or blocks being modified.
 - **Handle Match Errors Cleanly:** If a search-and-replace block fails due to a whitespace or string match error, do not panic or loop. Immediately run read_file to capture exact indentation, then retry a smaller, exact match block.
+- **Unrestricted New File Creation:** When creating a brand-new file, always write the entire file cleanly in a single `write_to_file` execution. Do not create an empty/short template and then apply multiple subsequent `replace_in_file` patches to fill it out. The 50-line surgical block constraint applies strictly to existing codebases, not new files.
 - Prioritize writing complete code files using file-writing tools only for _new_ files or very small files.
 - Verify your own code changes using the read_file tool to parse logic, syntax correctness, and structural parity across modules.
 - DO NOT run iterative diagnostic terminal test scripts, npm watch scripts, or interactive validation loops.

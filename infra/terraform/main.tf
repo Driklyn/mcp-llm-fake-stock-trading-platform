@@ -10,13 +10,13 @@
 #                   ▼
 #           HTTP API Gateway (versioned /api/v1 financial routes)
 #                   │
-#        ┌──────────┼──────────────────┐
-#        ▼          ▼                  ▼
-#  ticks-generator ticks-fetcher   trading-api
-#        │          │                  │
-#        │          ▼                  ▼
-#        │    DynamoDB            Aurora DSQL
-#        │   (hot ticks)          (relational ledger)
+#        ┌──────────┼───────────────┬──────────────┐
+#        ▼          ▼               ▼              ▼
+#  ticks-generator ticks-fetcher trading-api   assistant
+#        │          │               │              │
+#        │          ▼               ▼              ▼
+#        │    DynamoDB         Aurora DSQL  pending_confirmations
+#        │   (hot ticks)       (ledger)      (DynamoDB, TTL)
 #        └───────▶ hourly-sync-engine (DynamoDB → DSQL, hourly)
 # ---------------------------------------------------------------------------
 
@@ -85,6 +85,33 @@ resource "aws_dynamodb_table" "market_price_history" {
 }
 
 # ---------------------------------------------------------------------------
+# Pending trade confirmations — DynamoDB pending_confirmations
+# PROVISIONED 1/1 RCU/WCU stays $0 under the free tier. Items carry a `ttl`
+# = createdAt + pending_confirmations_ttl_seconds so DynamoDB natively evicts
+# stale confirmations at zero cost (reads also defend against TTL lag).
+# ---------------------------------------------------------------------------
+resource "aws_dynamodb_table" "pending_confirmations" {
+  name           = var.pending_confirmations_table_name
+  billing_mode   = "PROVISIONED"
+  read_capacity  = var.dynamodb_read_capacity
+  write_capacity = var.dynamodb_write_capacity
+
+  hash_key = "confirmationId"
+
+  attribute {
+    name = "confirmationId"
+    type = "S"
+  }
+
+  ttl {
+    enabled        = true
+    attribute_name = "ttl"
+  }
+
+  tags = var.tags
+}
+
+# ---------------------------------------------------------------------------
 # IAM roles — one per Lambda, least privilege, no VPC
 # ---------------------------------------------------------------------------
 resource "aws_iam_role" "ticks_generator_lambda" {
@@ -107,6 +134,12 @@ resource "aws_iam_role" "trading_api_lambda" {
 
 resource "aws_iam_role" "hourly_sync_lambda" {
   name               = var.hourly_sync_role_name
+  assume_role_policy = local.lambda_assume_role_policy
+  tags               = var.tags
+}
+
+resource "aws_iam_role" "assistant_lambda" {
+  name               = var.assistant_role_name
   assume_role_policy = local.lambda_assume_role_policy
   tags               = var.tags
 }
@@ -159,8 +192,8 @@ resource "aws_iam_role_policy" "trading_api_polyglot" {
         # DSQL is reached over the PostgreSQL wire protocol (port 5432) with an
         # IAM db-connect token, so the permission is dsql:Connect on the cluster
         # ARN — NOT an HTTP Data API ExecuteStatement.
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "dsql:Connect",
           "dsql:DbConnectAdmin"
         ]
@@ -193,12 +226,54 @@ resource "aws_iam_role_policy" "hourly_sync_polyglot" {
         Resource = aws_dynamodb_table.market_price_history.arn
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "dsql:Connect",
           "dsql:DbConnectAdmin"
         ]
         Resource = aws_dsql_cluster.market_db.arn
+      }
+    ]
+  })
+}
+
+# --- assistant: pending-confirmation CRUD on its own DynamoDB table ----------
+resource "aws_iam_role_policy" "assistant_pending_confirmations" {
+  name = "pending-confirmations"
+  role = aws_iam_role.assistant_lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Scan"
+        ]
+        Resource = aws_dynamodb_table.pending_confirmations.arn
+      }
+    ]
+  })
+}
+
+# --- assistant: direct Lambda invocation (no CloudFront round-trip) ----------
+# The assistant invokes trading-api and ticks-fetcher synchronously with
+# @aws-sdk/client-lambda instead of routing back out through CloudFront.
+resource "aws_iam_role_policy" "assistant_invoke_lambdas" {
+  name = "invoke-trading-api-and-ticks-fetcher"
+  role = aws_iam_role.assistant_lambda.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["lambda:InvokeFunction"]
+        Resource = [
+          aws_lambda_function.trading_api.arn,
+          aws_lambda_function.ticks_fetcher.arn
+        ]
       }
     ]
   })
@@ -222,6 +297,11 @@ resource "aws_iam_role_policy_attachment" "trading_api_basic_execution" {
 
 resource "aws_iam_role_policy_attachment" "hourly_sync_basic_execution" {
   role       = aws_iam_role.hourly_sync_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "assistant_basic_execution" {
+  role       = aws_iam_role.assistant_lambda.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
@@ -284,8 +364,9 @@ resource "aws_lambda_function" "ticks_fetcher" {
 
   environment {
     variables = {
-      MARKET_TABLE  = var.dynamodb_table_name
-      MARKET_SYMBOL = var.market_symbol
+      MARKET_TABLE    = var.dynamodb_table_name
+      MARKET_SYMBOL   = var.market_symbol
+      CF_SECRET_TOKEN = var.cloudfront_custom_secret_token
     }
   }
 
@@ -334,7 +415,7 @@ resource "aws_lambda_event_source_mapping" "price_stream_to_trading_api" {
   function_name     = aws_lambda_function.trading_api.arn
   starting_position = "LATEST" # Reads newly populated data variations moving forward
   batch_size        = 4        # Gathers up to 4 ticks per minute into a single invoke
-  
+
   # Only wake up the trading engine for raw INSERT actions.
   # This ignores DynamoDB background TTL delete events, completely avoiding waste compute.
   filter_criteria {
@@ -384,6 +465,44 @@ resource "aws_lambda_function" "hourly_sync_engine" {
 
 resource "aws_cloudwatch_log_group" "hourly_sync_logs" {
   name              = "/aws/lambda/${var.hourly_sync_function_name}"
+  retention_in_days = 1
+  tags              = var.tags
+}
+
+data "archive_file" "assistant_lambda" {
+  type        = "zip"
+  source_dir  = "${path.module}/../lambdas/assistant/dist"
+  output_path = "${path.module}/.build/assistant.zip"
+}
+
+resource "aws_lambda_function" "assistant" {
+  function_name    = var.assistant_function_name
+  role             = aws_iam_role.assistant_lambda.arn
+  handler          = "index.handler"
+  runtime          = "nodejs22.x"
+  memory_size      = var.lambda_memory_size
+  timeout          = var.lambda_timeout
+  filename         = data.archive_file.assistant_lambda.output_path
+  source_code_hash = data.archive_file.assistant_lambda.output_base64sha256
+
+  environment {
+    variables = {
+      TRADING_API_FUNCTION_NAME         = aws_lambda_function.trading_api.function_name
+      TICKS_FETCHER_FUNCTION_NAME       = aws_lambda_function.ticks_fetcher.function_name
+      PENDING_CONFIRMATIONS_TABLE       = var.pending_confirmations_table_name
+      PENDING_CONFIRMATIONS_TTL_SECONDS = tostring(var.pending_confirmations_ttl_seconds)
+      LLM_BASE_URL                      = var.assistant_llm_base_url
+      LLM_CHAT_PATH                     = var.assistant_llm_chat_path
+      LLM_API_KEY                       = var.assistant_llm_api_key
+      LLM_MODEL                         = var.assistant_llm_model
+    }
+  }
+
+  tags = var.tags
+}
+
+resource "aws_cloudwatch_log_group" "assistant_logs" {
+  name              = "/aws/lambda/${var.assistant_function_name}"
   retention_in_days = 1
   tags              = var.tags
 }
@@ -489,6 +608,14 @@ resource "aws_apigatewayv2_integration" "trading_api" {
   payload_format_version = "2.0"
 }
 
+resource "aws_apigatewayv2_integration" "assistant" {
+  api_id                 = aws_apigatewayv2_api.market_api.id
+  integration_type       = "AWS_PROXY"
+  integration_method     = "POST"
+  integration_uri        = aws_lambda_function.assistant.invoke_arn
+  payload_format_version = "2.0"
+}
+
 # --- Routes ----------------------------------------------------------------
 resource "aws_apigatewayv2_route" "ticks_generator_post" {
   api_id    = aws_apigatewayv2_api.market_api.id
@@ -556,6 +683,12 @@ resource "aws_apigatewayv2_route" "orders_process_post" {
   target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
 }
 
+resource "aws_apigatewayv2_route" "assistant_post" {
+  api_id    = aws_apigatewayv2_api.market_api.id
+  route_key = "POST /api/v1/assistant"
+  target    = "integrations/${aws_apigatewayv2_integration.assistant.id}"
+}
+
 # --- Let API Gateway invoke the Lambdas -------------------------------------
 resource "aws_lambda_permission" "ticks_generator_apigw" {
   action        = "lambda:InvokeFunction"
@@ -574,6 +707,13 @@ resource "aws_lambda_permission" "ticks_fetcher_apigw" {
 resource "aws_lambda_permission" "trading_api_apigw" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.trading_api.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.market_api.execution_arn}/*/*"
+}
+
+resource "aws_lambda_permission" "assistant_apigw" {
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.assistant.function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.market_api.execution_arn}/*/*"
 }
@@ -663,6 +803,14 @@ resource "aws_cloudfront_distribution" "market_edge" {
   origin {
     domain_name = local.api_gateway_origin_domain
     origin_id   = "market-api-gateway"
+
+    # Shared secret injected on every origin request so ticks-fetcher can tell
+    # CloudFront-served traffic apart from callers hitting the API Gateway URL
+    # directly. Managed by var.cloudfront_custom_secret_token (sensitive).
+    custom_header {
+      name  = "X-From-CloudFront"
+      value = var.cloudfront_custom_secret_token
+    }
 
     custom_origin_config {
       http_port              = 80

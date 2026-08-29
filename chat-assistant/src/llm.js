@@ -381,6 +381,8 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     model = "llama3.1:8b",
     fetchFn = globalThis.fetch,
     baseUrl = "http://localhost:11434/api",
+    chatPath = "/chat",
+    apiKey,
     pricePerShare = 100,
   } = dependencies;
 
@@ -402,9 +404,12 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
   try {
     const toolList = [...VALID_TOOLS].join(", ");
 
-    const response = await fetchFn(`${baseUrl.replace(/\/$/, "")}/chat`, {
+    const response = await fetchFn(`${baseUrl.replace(/\/$/, "")}${chatPath}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+      },
       body: JSON.stringify({
         model,
         stream: false,
@@ -415,9 +420,11 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
           },
           { role: "user", content: prompt },
         ],
-        options: {
-          temperature: 0.1,
-        },
+        // Ollama nests sampling options under `options`; OpenAI-compatible
+        // endpoints (e.g. OpenRouter) take `temperature` at the top level.
+        ...(apiKey
+          ? { temperature: 0.1 }
+          : { options: { temperature: 0.1 } }),
       }),
     });
 
@@ -439,7 +446,9 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     const textHasBuyIntent = /(buy|purchase|acquire|own|grab)/.test(
       normalizedText,
     );
-    const textHasSellIntent = /(sell|liquidate|exit|dump)/.test(normalizedText);
+    const textHasSellIntent = /(sell|liquidate|exit|dump)/.test(
+      normalizedText,
+    );
     const textHasTriggerWord =
       /(above|over|higher than|below|under|lower than|rises?\s+to|drops?\s+to|falls?\s+to|climbs?\s+to)/.test(
         normalizedText,
@@ -520,3 +529,8 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     };
   }
 }
+
+
+
+
+

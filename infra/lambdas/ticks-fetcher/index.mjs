@@ -16,6 +16,9 @@
  * Environment:
  *   MARKET_TABLE  default "market_price_history"
  *   MARKET_SYMBOL default "FAKE"
+ *   CF_SECRET_TOKEN  shared secret injected by CloudFront via X-From-CloudFront;
+ *                    required for HTTP requests, ignored for trusted internal
+ *                    direct invocations (e.g. from the assistant Lambda).
  */
 
 import { DynamoDBClient, QueryCommand } from "@aws-sdk/client-dynamodb";
@@ -59,6 +62,33 @@ function apiResponse(statusCode, body) {
 }
 
 export async function handler(event = {}) {
+  // True Isolation: HTTP API Gateway (payload format 2.0) natively injects
+  // `requestContext` + `version`. The assistant Lambda's direct SDK invocation
+  // carries neither, so it is automatically treated as a trusted internal call.
+  const isHttpRequest = !!(event?.requestContext || event?.version);
+
+  if (isHttpRequest) {
+    // ---- STRICT CLOUDFRONT PUBLIC GUARD PATH ----
+    // Reject anything that did not come through CloudFront (which injects the
+    // X-From-CloudFront custom header) before it can read the 1-RCU DynamoDB
+    // table. Fails closed if the shared secret is not configured.
+    const expectedToken = process.env.CF_SECRET_TOKEN;
+    const incomingToken = event?.headers?.["x-from-cloudfront"];
+
+    if (!expectedToken || !incomingToken || incomingToken !== expectedToken) {
+      return {
+        statusCode: 403,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "Forbidden: Direct public API access is denied.",
+        }),
+      };
+    }
+  }
+  // else: TRUSTED INTERNAL PATH — no header checks. AWS IAM is the boundary:
+  // only the assistant_lambda role holds `lambda:InvokeFunction` on this
+  // function.
+
   const region = process.env.AWS_REGION ?? "us-east-1";
   const tableName = process.env.MARKET_TABLE ?? DEFAULT_TABLE;
   const symbol = process.env.MARKET_SYMBOL ?? DEFAULT_SYMBOL;

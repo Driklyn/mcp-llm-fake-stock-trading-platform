@@ -8,7 +8,7 @@ output "dynamodb_table_arn" {
   value       = aws_dynamodb_table.market_price_history.arn
 }
 
-output "api_gateway_endpoint" {
+output "api_gateway_base_url" {
   description = "Base URL of the HTTP API Gateway (execute-api)."
   value       = aws_apigatewayv2_api.market_api.api_endpoint
 }
@@ -86,4 +86,19 @@ output "ticks_generator_schedule_arn" {
 output "hourly_sync_schedule_arn" {
   description = "ARN of the hourly EventBridge schedule."
   value       = aws_cloudwatch_event_rule.hourly_sync_schedule.arn
+}
+
+output "assistant_endpoint" {
+  description = "POST /api/v1/assistant through the CloudFront edge."
+  value       = "https://${aws_apigatewayv2_api.market_api.api_endpoint}/api/v1/assistant"
+}
+
+output "assistant_lambda_arn" {
+  description = "ARN of the assistant Lambda."
+  value       = aws_lambda_function.assistant.arn
+}
+
+output "pending_confirmations_table_name" {
+  description = "Name of the DynamoDB pending-confirmations table."
+  value       = aws_dynamodb_table.pending_confirmations.name
 }

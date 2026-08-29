@@ -82,6 +82,12 @@ variable "cloudfront_ticks_cache_ttl" {
   default     = 14
 }
 
+variable "cloudfront_custom_secret_token" {
+  type        = string
+  description = "A secure shared passphrase between CloudFront and our ticks-fetcher Lambda."
+  sensitive   = true
+}
+
 # ---------------------------------------------------------------------------
 # Relational ledger (Aurora DSQL)
 # ---------------------------------------------------------------------------
@@ -178,6 +184,58 @@ variable "account_start_cash" {
   description = "Starting cash balance for new trading accounts (used by trading-api)."
   type        = number
   default     = 10000
+}
+
+# ---------------------------------------------------------------------------
+# Chat assistant (shared chat-assistant package hosted as a Lambda)
+# ---------------------------------------------------------------------------
+
+variable "assistant_function_name" {
+  description = "Name of the assistant Lambda."
+  type        = string
+  default     = "market-assistant"
+}
+
+variable "assistant_role_name" {
+  description = "Name of the IAM role assumed by the assistant Lambda."
+  type        = string
+  default     = "market-assistant-role"
+}
+
+variable "pending_confirmations_table_name" {
+  description = "Name of the DynamoDB table holding unconfirmed large trades."
+  type        = string
+  default     = "pending_confirmations"
+}
+
+variable "pending_confirmations_ttl_seconds" {
+  description = "TTL (seconds) for unconfirmed trades before DynamoDB natively evicts them."
+  type        = number
+  default     = 7200
+}
+
+variable "assistant_llm_base_url" {
+  description = "OpenAI-compatible LLM base URL (e.g. https://openrouter.ai/api/v1). Leave empty to keep chat deterministic-only."
+  type        = string
+  default     = "https://openrouter.ai/api/v1"
+}
+
+variable "assistant_llm_chat_path" {
+  description = "LLM chat completions path appended to LLM_BASE_URL."
+  type        = string
+  default     = "/chat/completions"
+}
+
+variable "assistant_llm_model" {
+  description = "LLM model id used by the assistant (OpenRouter model ids work here)."
+  type        = string
+  default     = "openrouter/free"
+}
+
+variable "assistant_llm_api_key" {
+  description = "Bearer API key for the LLM provider. Sensitive — set via tfvars or the environment."
+  type        = string
+  sensitive   = true
 }
 
 variable "tags" {

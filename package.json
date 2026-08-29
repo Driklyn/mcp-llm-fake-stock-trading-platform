@@ -6,6 +6,8 @@
     "server",
     "client",
     "ui",
+    "chat-assistant",
+    "infra/lambdas/assistant",
     "infra/lambdas/ticks-generator",
     "infra/lambdas/ticks-fetcher",
     "infra/lambdas/trading-api",
@@ -15,6 +17,7 @@
     "dev": "npm run dev --workspace client",
     "dev:server": "npm run dev --workspace server",
     "build": "npm run build --workspace client",
-    "test": "npm test --workspace server"
+    "build:assistant": "npm run build --workspace infra/lambdas/assistant",
+    "test": "npm test --workspace server && npm test --workspace chat-assistant && npm test --workspace infra/lambdas/assistant"
   }
 }

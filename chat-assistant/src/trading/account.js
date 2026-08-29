@@ -1,5 +1,6 @@
 /**
- * The local server's account service — a stateless proxy over trading-api.
+ * The account service — a stateless proxy over trading-api, shared by the dev
+ * server and the chat assistant Lambda.
  *
  * Reproduces the exact response shapes the UI / MCP / chat layers already
  * consume (previously produced by the deleted trading/engine.js), and keeps a
@@ -191,7 +192,7 @@ export function createAccountService({
     return { ...MARKET_PARAMS };
   }
 
-  // Merge a mutation response with a freshly refreshed account summary so the
+    // Merge a mutation response with a freshly refreshed account summary so the
   // returned object keeps the legacy engine result shape (traded quantity,
   // post-trade position, and current account figures).
   async function finalize(result, extra = {}) {
@@ -324,3 +325,4 @@ export function createAccountService({
 
 export const account = createAccountService();
 export default account;
+

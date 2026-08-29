@@ -3,43 +3,48 @@
 100% serverless and VPC-free (no VPCs, subnets, or NAT Gateways), designed to stay
 inside the AWS Always Free Tier.
 
-| Piece             | Technology                                                        | Free-tier impact                          |
-| ----------------- | ----------------------------------------------------------------- | ----------------------------------------- |
-| price store       | DynamoDB `market_price_history`, PROVISIONED 1/1 RCU/WCU, TTL 24h | 25 GB + 25 RCU/WCU included               |
-| cache edge        | CloudFront distribution in front of an HTTP API Gateway           | 1 TB egress + 10M requests / mo included  |
-| API layer         | API Gateway HTTP API, versioned `/api/v1/*` routes                | 1M requests / mo included                 |
-| tick compute      | `ticks-generator` Lambda (Node 22, 128 MB)                        | ~43k invocations / mo, ~50 ms each        |
-| read compute      | `ticks-fetcher` Lambda (Node 22, 128 MB)                          | absorbed by the CloudFront edge (14s TTL) |
-| trade compute     | `trading-api` Lambda (Node 22, 128 MB)                            | on-demand + reactive fill each tick       |
-| fill trigger      | DynamoDB Stream (INSERT) → `trading-api`                          | 2.5M stream read requests / mo included   |
-| sync compute      | `hourly-sync-engine` Lambda (Node 22, 128 MB)                     | 720 invocations / mo, 1 bulk INSERT each  |
-| relational ledger | Aurora DSQL (PostgreSQL dialect), single region                   | ~0 DPU (one 240-row INSERT / h)           |
-| schedules         | EventBridge `cron(* * * * ? *)` (ticks) + `cron(0 * * * ? *)`     | negligible                                |
+| Piece             | Technology                                                         | Free-tier impact                          |
+| ----------------- | ------------------------------------------------------------------ | ----------------------------------------- |
+| price store       | DynamoDB `market_price_history`, PROVISIONED 1/1 RCU/WCU, TTL 24h  | 25 GB + 25 RCU/WCU included               |
+| pending store     | DynamoDB `pending_confirmations`, PROVISIONED 1/1 RCU/WCU, TTL 2h  | shares the same 25 GB + 25 RCU/WCU        |
+| cache edge        | CloudFront distribution in front of an HTTP API Gateway            | 1 TB egress + 10M requests / mo included  |
+| API layer         | API Gateway HTTP API, versioned `/api/v1/*` routes                 | 1M requests / mo included                 |
+| tick compute      | `ticks-generator` Lambda (Node 22, 128 MB)                         | ~43k invocations / mo, ~50 ms each        |
+| read compute      | `ticks-fetcher` Lambda (Node 22, 128 MB)                           | absorbed by the CloudFront edge (14s TTL) |
+| trade compute     | `trading-api` Lambda (Node 22, 128 MB)                             | on-demand + reactive fill each tick       |
+| fill trigger      | DynamoDB Stream (INSERT) → `trading-api`                           | 2.5M stream read requests / mo included   |
+| sync compute      | `hourly-sync-engine` Lambda (Node 22, 128 MB)                      | 720 invocations / mo, 1 bulk INSERT each  |
+| chat compute      | `assistant` Lambda (Node 22, 128 MB, Vite-bundled)                 | on-demand, ~50-200 ms per chat message    |
+| relational ledger | Aurora DSQL (PostgreSQL dialect), single region                    | ~0 DPU (one 240-row INSERT / h)           |
+| schedules         | EventBridge `cron(* * * * ? *)` (ticks) + `cron(0 * * * ? *)`      | negligible                                |
 
 ## Architecture
 
-    viewers ─▶ CloudFront (14s edge cache on GET /api/v1/ticks/*)
-                    │
-                    ▼
-            HTTP API Gateway
-              GET  /api/v1/ticks/4h      → ticks-fetcher
-              GET  /api/v1/ticks/latest  → ticks-fetcher
-              POST /api/v1/ticks         → ticks-generator
-              POST /api/v1/trades        → trading-api
-              GET  /api/v1/portfolio     → trading-api
-                    │
-        ┌───────────┼──────────────────┐
-        ▼           ▼                  ▼
+```mermaid
+flowchart TB
+    V["viewers"] -->|"GET /api/v1/ticks/* · 14s edge cache"| CF["CloudFront"]
+    CF -->|HTTPS| GW["HTTP API Gateway<br/>(versioned /api/v1 routes)"]
 
-ticks-generator ticks-fetcher trading-api
-│ │ │ │
-│ ▼ │ ▼
-│ DynamoDB Aurora DSQL
-│ (hot ticks, 24h TTL) (ledger: portfolio + trades)
-│ ▲
-└───────▶ hourly-sync-engine ──┘ (last 240 points, hourly)
-│
-└────── DynamoDB Stream (INSERT-only) ──▶ trading-api (reactive order fills)
+    GW -->|"GET /api/v1/ticks/4h · GET /api/v1/ticks/latest"| FETCHER["ticks-fetcher"]
+    GW -->|"POST /api/v1/ticks"| GENERATOR["ticks-generator"]
+    GW -->|"POST /api/v1/trades · GET /api/v1/trades · GET /api/v1/portfolio · POST /api/v1/transfers · POST /api/v1/orders · GET /api/v1/orders · POST /api/v1/orders/{orderId}/cancel · POST /api/v1/orders/process"| TRADING["trading-api"]
+    GW -->|"POST /api/v1/assistant"| ASSISTANT["assistant"]
+    ASSISTANT -->|"LambdaClient.invoke (direct)"| TRADING
+    ASSISTANT -->|"LambdaClient.invoke (direct)"| FETCHER
+
+    GENERATOR -->|BatchWriteItem| DDB["DynamoDB<br/>market_price_history<br/>(hot ticks, 24h TTL)"]
+    FETCHER -->|Query| DDB
+    TRADING -->|Query| DDB
+    TRADING <-->|"portfolio + trades + orders + transfers"| DSQL["Aurora DSQL<br/>market_db (ledger)"]
+    ASSISTANT <-->|GetItem / PutItem / DeleteItem / Scan| PENDING["DynamoDB<br/>pending_confirmations<br/>(2h TTL)"]
+
+    DDB -->|"DynamoDB Stream (INSERT-only)"| TRADING
+    SYNC["hourly-sync-engine"] -->|"Query (last 240 points)"| DDB
+    SYNC -->|"bulk INSERT (ON CONFLICT DO NOTHING)"| DSQL
+
+    EV1["EventBridge<br/>cron(* * * * ? *)<br/>(every minute)"] --> GENERATOR
+    EV2["EventBridge<br/>cron(0 * * * ? *)<br/>(hourly)"] --> SYNC
+```
 
 ## Layout
 
@@ -49,22 +54,23 @@ ticks-generator ticks-fetcher trading-api
         ticks-fetcher/         index.mjs + package.json (@aws-sdk/client-dynamodb)
         trading-api/           index.mjs + package.json (pg, @aws-sdk/client-dsql, @aws-sdk/client-dynamodb)
         hourly-sync-engine/    index.mjs + package.json (pg, @aws-sdk/client-dsql, @aws-sdk/client-dynamodb)
+        assistant/             index.mjs + vite.config.js + package.json (chat-assistant workspace + @aws-sdk; Vite-bundled to dist/)
       terraform/
         versions.tf            terraform + provider version pins
         providers.tf           AWS provider region
-        variables.tf           all tunables (market params, table/function names, TTLs)
-        main.tf                DynamoDB (+ stream trigger), API Gateway, CloudFront, 4 Lambdas, IAM, EventBridge, DSQL
+        variables.tf           all tunables (market params, table/function names, TTLs, assistant LLM)
+        main.tf                DynamoDB (price history + pending confirmations + stream trigger), API Gateway, CloudFront, 5 Lambdas, IAM, EventBridge, DSQL
         outputs.tf             endpoints + ARNs
 
 ## Deploy (manual)
 
-1.  Install each Lambda's dependencies (must run before `terraform plan` so the
-    `archive_file` data sources include `node_modules`):
+1.  Install all workspace dependencies and build the assistant Lambda bundle.
+    The assistant's Terraform `archive_file` zips `infra/lambdas/assistant/dist`,
+    so the Vite build must run before `terraform plan` (the other four Lambdas
+    are zipped with their own `node_modules`):
 
-        cd infra/lambdas/ticks-generator    && npm install
-        cd infra/lambdas/ticks-fetcher      && npm install
-        cd infra/lambdas/trading-api        && npm install
-        cd infra/lambdas/hourly-sync-engine && npm install
+        npm install
+        npm run build:assistant
 
 2.  Configure AWS credentials and initialize Terraform:
 
@@ -96,6 +102,7 @@ ticks-generator ticks-fetcher trading-api
 | GET    | /api/v1/orders                  | trading-api     | list orders, `?status=open`                                                      |
 | POST   | /api/v1/orders/{orderId}/cancel | trading-api     | cancel an open order (idempotent)                                                |
 | POST   | /api/v1/orders/process          | trading-api     | internal/manual: fill triggered orders (DynamoDB stream-driven on each tick)     |
+| POST   | /api/v1/assistant               | assistant       | `{ message }` chat request, or `{ action: confirm\|cancel, confirmationId }`; large trades gate on a DynamoDB pending confirmation |
 
 ## Notes
 
@@ -128,6 +135,14 @@ ticks-generator ticks-fetcher trading-api
   writes into DynamoDB flows through the table stream into `trading-api`
   (INSERT-only event-source mapping), which evaluates open orders against the
   fresh price. `POST /api/v1/orders/process` remains as a manual fallback.
+- The `assistant` Lambda bundles the shared `chat-assistant` workspace package
+  (plus @aws-sdk) into a single `dist/index.mjs` via Vite, so it needs no
+  `node_modules` at runtime. It invokes `trading-api` and `ticks-fetcher`
+  directly with `@aws-sdk/client-lambda` (synchronous `RequestResponse`) rather
+  than looping back out through CloudFront; its IAM role carries
+  `lambda:InvokeFunction` on both functions. Pending confirmations live in the
+  `pending_confirmations` DynamoDB table with a 2h TTL; reads treat expired
+  items as missing because DynamoDB TTL garbage collection can lag ~48h.
 - The local dev server (`server/`) is a stateless proxy over this API: set
   `TRADING_API_URL` to the `trading_api_base_url` Terraform output
   (`https://<cloudfront-domain>`) when running it.
