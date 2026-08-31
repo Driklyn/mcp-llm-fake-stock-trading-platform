@@ -14,7 +14,8 @@
  * returns the parsed body (or throws TradingApiError for non-2xx responses).
  *
  * Route ownership:
- *   trading-api      portfolio / trades / transfers / orders — event.routeKey
+ *   trading-api      portfolio / orders / POST trades & transfers — event.routeKey
+ *   trading-api      GET trades/50 + transfers/50 — event.rawPath drives the feed window
  *   ticks-fetcher    ticks/4h + ticks/latest — event.rawPath drives its window
  *
  * Mutations carry a fresh UUID `idempotencyKey` in the body so an ambiguous
@@ -133,9 +134,17 @@ export function createLambdaTradingClient({
   return {
     fetchPortfolio: () =>
       invoke(tradingApiFunctionName, "GET /api/v1/portfolio"),
-    fetchTrades: (limit = 50) =>
-      invoke(tradingApiFunctionName, "GET /api/v1/trades", {
-        queryStringParameters: { limit: String(limit) },
+    fetchTrades: () =>
+      invoke(tradingApiFunctionName, "GET /api/v1/trades/50", {
+        rawPath: "/api/v1/trades/50",
+      }),
+    fetchTransfers: () =>
+      invoke(tradingApiFunctionName, "GET /api/v1/transfers/50", {
+        rawPath: "/api/v1/transfers/50",
+      }),
+    fetchTicks4h: () =>
+      invoke(ticksFetcherFunctionName, "GET /api/v1/ticks/4h", {
+        rawPath: "/api/v1/ticks/4h",
       }),
     fetchLatestTick: () =>
       invoke(ticksFetcherFunctionName, "GET /api/v1/ticks/latest", {

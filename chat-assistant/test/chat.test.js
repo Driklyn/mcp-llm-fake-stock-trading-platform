@@ -7,8 +7,6 @@ function stubAccount(overrides = {}) {
   return {
     getQuote: async () => ({ symbol: "FAKE", price: 100, history: [] }),
     getPortfolioSummary: async () => ({
-      symbol: "FAKE",
-      price: 100,
       account: {
         cashAvailable: 10000,
         holdings: 0,
@@ -20,14 +18,6 @@ function stubAccount(overrides = {}) {
         totalEquity: 10000,
         cashTransferred: 0,
       },
-      holdings: 0,
-      cashAvailable: 10000,
-      investedValue: 0,
-      costBasis: 0,
-      totalGainsLosses: 0,
-      totalEquity: 10000,
-      history: [],
-      orders: [],
       transactions: [],
     }),
     buy: async (quantity) => ({
@@ -69,7 +59,11 @@ function stubAccount(overrides = {}) {
 
 // `fetchFn: null` forces the deterministic planner (no LLM call), keeping the
 // handler tests hermetic.
-function makeAssistant({ account = stubAccount(), pendingStore, llm = {} } = {}) {
+function makeAssistant({
+  account = stubAccount(),
+  pendingStore,
+  llm = {},
+} = {}) {
   return createAssistant({
     account,
     pendingStore: pendingStore ?? createMemoryPendingStore(),
@@ -180,15 +174,30 @@ test("a natural-language confirmation clears the pending store", async () => {
   assert.equal(await pendingStore.size(), 0);
 });
 
-test("portfolio requests return the account snapshot", async () => {
+test("portfolio requests return the account summary", async () => {
   const assistant = makeAssistant();
   const { status, body } = await assistant.handleRequest({
     message: "show my portfolio",
   });
   assert.equal(status, 200);
-  assert.equal(body.plan.tool, "get_account_snapshot");
-  assert.match(body.text, /Portfolio snapshot/);
+  assert.equal(body.plan.tool, "get_portfolio_summary");
+  assert.match(
+    body.text,
+    /Portfolio summary: cash \$10000\.00, invested \$0\.00, gains\/losses \$0\.00, holdings 0, total equity \$10000\.00\./,
+  );
   assert.equal(body.payload.account.cashAvailable, 10000);
+  // The full account object is returned so every consumer can render its fields.
+  assert.deepEqual(Object.keys(body.payload.account).sort(), [
+    "cashAvailable",
+    "cashTransferred",
+    "costBasis",
+    "holdings",
+    "investedValue",
+    "realizedGains",
+    "totalEquity",
+    "totalGainsLosses",
+    "unrealizedGains",
+  ]);
 });
 
 test("price requests return the current quote", async () => {
@@ -250,5 +259,3 @@ test("createAssistant requires both the account and the pending store", () => {
     /pendingStore/,
   );
 });
-
-

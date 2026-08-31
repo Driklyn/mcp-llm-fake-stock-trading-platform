@@ -8,6 +8,8 @@ import {
   account,
   createAssistant,
   createMemoryPendingStore,
+  fetchTicks4h,
+  fetchLatestTick,
   isCloudMode,
   requiresConfirmationForTradeValue,
 } from "chat-assistant";
@@ -65,19 +67,43 @@ app.post("/api/assistant", async (req, res) => {
   } catch (error) {
     console.error("Assistant route error:", error);
     res.status(500).json({
-      plan: { tool: "get_account_snapshot", arguments: {} },
+      plan: { tool: "get_portfolio_summary", arguments: {} },
       text: "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",
     });
   }
 });
 
-app.get("/api/snapshot", async (req, res) => {
+app.get("/api/portfolio", async (req, res) => {
   try {
     const summary = await account.getPortfolioSummary({ force: true });
-    res.json({
-      ...summary,
-      marketParams: account.getMarketParams(),
-    });
+    res.json({ account: summary.account });
+  } catch (error) {
+    res.status(503).json({ error: error?.message ?? String(error) });
+  }
+});
+
+app.get("/api/transactions", async (req, res) => {
+  try {
+    res.json({ transactions: await account.getTransactions() });
+  } catch (error) {
+    res.status(503).json({ error: error?.message ?? String(error) });
+  }
+});
+
+// Proxy-mode price feed: delegates to the deployed ticks API (which direct
+// mode hits at /api/v1/ticks/* via CloudFront). The client uses these
+// non-versioned /api/ticks/* paths in proxy mode.
+app.get("/api/ticks/4h", async (req, res) => {
+  try {
+    res.json(await fetchTicks4h());
+  } catch (error) {
+    res.status(503).json({ error: error?.message ?? String(error) });
+  }
+});
+
+app.get("/api/ticks/latest", async (req, res) => {
+  try {
+    res.json(await fetchLatestTick());
   } catch (error) {
     res.status(503).json({ error: error?.message ?? String(error) });
   }
@@ -181,15 +207,61 @@ function broadcast(payload) {
   }
 }
 
-async function buildSnapshot() {
+async function buildAccountMessage() {
   const summary = await account.getPortfolioSummary();
+  return { type: "account", payload: { account: summary.account } };
+}
+
+async function buildTransactionsMessage() {
   return {
-    type: "snapshot",
-    payload: {
-      ...summary,
-      marketParams: account.getMarketParams(),
-    },
+    type: "transactions",
+    payload: { transactions: await account.getTransactions() },
   };
+}
+
+function latestTickPayload(tick) {
+  const point = (Array.isArray(tick?.points) ? tick.points : []).at(-1);
+  return { symbol: tick?.symbol, points: point ? [point] : [] };
+}
+
+function tickMessage(tick) {
+  return { type: "tick", payload: latestTickPayload(tick) };
+}
+
+async function fetchTickMessage() {
+  return tickMessage(await fetchLatestTick());
+}
+
+// The three WS messages that make up the full client state.
+async function buildStateMessages() {
+  const [summary, transactions, tick] = await Promise.all([
+    account.getPortfolioSummary(),
+    account.getTransactions(),
+    fetchLatestTick(),
+  ]);
+  return [
+    { type: "account", payload: { account: summary.account } },
+    { type: "transactions", payload: { transactions } },
+    tickMessage(tick),
+  ];
+}
+
+// Broadcast the full state as three independent messages. Each message is
+// settled separately so one failing feed (e.g. transactions before the
+// transfers endpoint is deployed) can't take down the account/tick updates.
+async function broadcastState() {
+  const [accountMessage, transactionsMessage, tick] = await Promise.allSettled([
+    buildAccountMessage(),
+    buildTransactionsMessage(),
+    fetchTickMessage(),
+  ]);
+  for (const settled of [accountMessage, transactionsMessage, tick]) {
+    if (settled.status === "fulfilled") {
+      broadcast(settled.value);
+    } else {
+      console.error("State broadcast failed:", settled.reason);
+    }
+  }
 }
 
 let marketAdvanceInFlight = false;
@@ -199,21 +271,16 @@ async function runMarketAdvance() {
   if (marketAdvanceInFlight) return;
   marketAdvanceInFlight = true;
   try {
-    const snapshot = await buildSnapshot();
-    const price = Number(snapshot.payload.price ?? 0);
+    // Drive the price-change detection off the latest tick payload.
+    const tick = await fetchLatestTick();
+    const point = (Array.isArray(tick?.points) ? tick.points : []).at(-1);
+    const price = Number(point?.price ?? 0);
     if (lastTickedPrice === null || price !== lastTickedPrice) {
       lastTickedPrice = price;
-      broadcast({
-        type: "market-tick",
-        payload: {
-          price,
-          history: snapshot.payload.history,
-          account: snapshot.payload.account,
-          orders: snapshot.payload.orders,
-        },
-      });
+      broadcast(tickMessage(tick));
     }
-    broadcast(snapshot);
+    broadcast(await buildAccountMessage());
+    broadcast(await buildTransactionsMessage());
   } catch (error) {
     console.error("Market refresh failed:", error);
   } finally {
@@ -225,7 +292,10 @@ setInterval(runMarketAdvance, 15000);
 
 wss.on("connection", async (ws) => {
   try {
-    ws.send(JSON.stringify(await buildSnapshot()));
+    const messages = await buildStateMessages();
+    for (const message of messages) {
+      ws.send(JSON.stringify(message));
+    }
   } catch (error) {
     ws.send(
       JSON.stringify({ type: "error", error: error?.message ?? String(error) }),
@@ -301,7 +371,7 @@ wss.on("connection", async (ws) => {
           );
         }
 
-        broadcast(await buildSnapshot());
+        broadcastState();
         return;
       }
 
@@ -369,14 +439,14 @@ wss.on("connection", async (ws) => {
           );
         }
 
-        broadcast(await buildSnapshot());
+        broadcastState();
         return;
       }
 
       if (data.type === "transfer") {
         try {
           const updated = await account.transfer(data.amount ?? 0);
-          broadcast(await buildSnapshot());
+          broadcastState();
           ws.send(
             JSON.stringify({
               type: "trade-result",
@@ -454,7 +524,7 @@ wss.on("connection", async (ws) => {
             quantity,
             price: orderPrice,
           });
-          broadcast(await buildSnapshot());
+          broadcastState();
           ws.send(
             JSON.stringify({
               type: "trade-result",
@@ -477,7 +547,7 @@ wss.on("connection", async (ws) => {
       if (data.type === "cancel_order") {
         try {
           const updated = await account.cancelOrder(data.orderId);
-          broadcast(await buildSnapshot());
+          broadcastState();
           ws.send(
             JSON.stringify({
               type: "trade-result",
@@ -507,8 +577,11 @@ wss.on("connection", async (ws) => {
         return;
       }
 
-      if (data.type === "get_snapshot") {
-        ws.send(JSON.stringify(await buildSnapshot()));
+      if (data.type === "get_state") {
+        const messages = await buildStateMessages();
+        for (const message of messages) {
+          ws.send(JSON.stringify(message));
+        }
         return;
       }
     } catch (error) {
@@ -520,6 +593,3 @@ wss.on("connection", async (ws) => {
 server.listen(3001, "0.0.0.0", () => {
   console.log("Fake stock market server running at ws://localhost:3001");
 });
-
-
-

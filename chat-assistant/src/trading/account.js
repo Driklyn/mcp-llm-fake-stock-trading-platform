@@ -5,6 +5,9 @@
  * Reproduces the exact response shapes the UI / MCP / chat layers already
  * consume (previously produced by the deleted trading/engine.js), and keeps a
  * 15s in-memory quote + portfolio cache so the broadcast cadence stays cheap.
+ * `getPortfolioSummary` returns `{ account }`: the full 9-field account object.
+ * Transactions live on the dedicated `getTransactions()` feed. Quote/price data
+ * lives in `getQuote` only — summaries never ship price, history, or orders.
  *
  * The service is a factory so tests can inject a fake client; the exported
  * `account` singleton uses the real cloudClient and is what server.js and the
@@ -42,7 +45,9 @@ function toClientOrder(order) {
     price: Number(order.price),
     status: order.status,
     createdAt: Number(order.created_at ?? 0) * 1000,
-    ...(order.fill_price != null ? { fillPrice: Number(order.fill_price) } : {}),
+    ...(order.fill_price != null
+      ? { fillPrice: Number(order.fill_price) }
+      : {}),
   };
 }
 
@@ -82,10 +87,14 @@ export function createAccountService({
   let quoteAt = 0;
   let summaryCache = null;
   let summaryAt = 0;
+  let transactionsCache = null;
+  let transactionsAt = 0;
 
   function invalidate() {
     summaryCache = null;
     summaryAt = 0;
+    transactionsCache = null;
+    transactionsAt = 0;
   }
 
   async function getQuote({ force = false } = {}) {
@@ -110,7 +119,7 @@ export function createAccountService({
     return quoteCache;
   }
 
-  function toSummary(portfolio, quote) {
+  function toSummary(portfolio) {
     const holdingsRows = Array.isArray(portfolio?.holdings)
       ? portfolio.holdings
       : [];
@@ -140,36 +149,7 @@ export function createAccountService({
       cashTransferred: Number(portfolio?.cashTransferred ?? 0),
     };
 
-    const trades = Array.isArray(portfolio?.recentTrades)
-      ? portfolio.recentTrades
-      : [];
-    const transfers = Array.isArray(portfolio?.recentTransfers)
-      ? portfolio.recentTransfers
-      : [];
-    const transactions = [
-      ...trades.map(toTransaction),
-      ...transfers.map(toTransaction),
-    ]
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 50);
-
-    return {
-      symbol: quote?.symbol ?? DEFAULT_SYMBOL,
-      price: Number(quote?.price ?? 0),
-      account,
-      holdings,
-      cashAvailable,
-      investedValue,
-      costBasis,
-      totalGainsLosses,
-      totalEquity,
-      history: Array.isArray(quote?.history) ? quote.history : [],
-      orders: (Array.isArray(portfolio?.openOrders)
-        ? portfolio.openOrders
-        : []
-      ).map(toClientOrder),
-      transactions,
-    };
+    return { account };
   }
 
   async function getPortfolioSummary({ force = false } = {}) {
@@ -177,22 +157,37 @@ export function createAccountService({
       return summaryCache;
     }
     const portfolio = await client.fetchPortfolio();
-    let quote;
-    try {
-      quote = await getQuote({ force });
-    } catch (error) {
-      quote = quoteCache ?? { symbol: DEFAULT_SYMBOL, price: 0, history: [] };
-    }
-    summaryCache = toSummary(portfolio, quote);
+    summaryCache = toSummary(portfolio);
     summaryAt = now();
     return summaryCache;
   }
 
-  function getMarketParams() {
-    return { ...MARKET_PARAMS };
+  // Independent transaction feed backed by the dedicated trades/transfers
+  // endpoints (not the portfolio's embedded recent* lists), cached like the
+  // summary so the 15s broadcast cadence stays cheap.
+  async function getTransactions({ force = false } = {}) {
+    if (!force && transactionsCache && now() - transactionsAt < CACHE_TTL_MS) {
+      return transactionsCache;
+    }
+    const [tradesResult, transfersResult] = await Promise.all([
+      client.fetchTrades(),
+      client.fetchTransfers(),
+    ]);
+    const trades = Array.isArray(tradesResult?.trades) ? tradesResult.trades : [];
+    const transfers = Array.isArray(transfersResult?.transfers)
+      ? transfersResult.transfers
+      : [];
+    transactionsCache = [
+      ...trades.map(toTransaction),
+      ...transfers.map(toTransaction),
+    ]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, 50);
+    transactionsAt = now();
+    return transactionsCache;
   }
 
-    // Merge a mutation response with a freshly refreshed account summary so the
+  // Merge a mutation response with a freshly refreshed account summary so the
   // returned object keeps the legacy engine result shape (traded quantity,
   // post-trade position, and current account figures).
   async function finalize(result, extra = {}) {
@@ -303,7 +298,7 @@ export function createAccountService({
     ]);
     quoteCache = quote;
     quoteAt = now();
-    summaryCache = toSummary(portfolio, quote);
+    summaryCache = toSummary(portfolio);
     summaryAt = now();
     return summaryCache;
   }
@@ -313,7 +308,7 @@ export function createAccountService({
     getQuote,
     getCachedQuote,
     getPortfolioSummary,
-    getMarketParams,
+    getTransactions,
     buy,
     sell,
     transfer,
@@ -325,4 +320,3 @@ export function createAccountService({
 
 export const account = createAccountService();
 export default account;
-

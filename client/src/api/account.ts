@@ -1,17 +1,18 @@
 /**
- * Maps the serverless cloud responses (`GET /api/v1/portfolio` + ticks) into
- * the exact `MarketSnapshot` shape the React UI consumes. This is the client
- * mirror of `server/src/trading/account.js` (`toSummary` / `toTransaction`),
- * so direct-mode and proxy-mode rendering stay identical.
+ * Maps the serverless cloud responses (`GET /api/v1/portfolio` + ticks, plus
+ * the dedicated `/api/v1/trades/50` + `/api/v1/transfers/50` feeds for
+ * transactions) into the exact shapes the React UI consumes. This is the client
+ * mirror of `server/src/trading/account.js` (`toSummary` / `toTransaction`), so
+ * direct-mode and proxy-mode rendering stay identical.
  */
 
 import type { Transaction } from "ui";
-import type { Account, MarketSnapshot } from "../types";
-import type { MarketParams } from "../utils/marketPrice";
+import type { Account, ChartInputPoint } from "../types";
 import type {
-  CloudOrder,
   CloudPortfolio,
   CloudTicks,
+  CloudTrade,
+  CloudTransfer,
 } from "./cloud";
 
 function round2(value: number): number {
@@ -58,25 +59,7 @@ export function mergeCloudTicks(
   };
 }
 
-export function toClientOrder(order: CloudOrder) {
-  return {
-    id: String(order.id),
-    symbol: order.symbol,
-    type: String(order.type ?? "").toLowerCase(),
-    kind: String(order.side ?? "").toLowerCase(),
-    quantity: Number(order.quantity),
-    price: Number(order.price),
-    status: order.status,
-    createdAt: Number(order.created_at ?? 0) * 1000,
-    ...(order.fill_price != null ? { fillPrice: Number(order.fill_price) } : {}),
-  };
-}
-
-function toTransaction(
-  entry:
-    | CloudPortfolio["recentTrades"][number]
-    | CloudPortfolio["recentTransfers"][number],
-): Transaction {
+function toTransaction(entry: CloudTrade | CloudTransfer): Transaction {
   if ("side" in entry) {
     const side = String(entry.side).toLowerCase() as "buy" | "sell";
     const quantity = Number(entry.quantity);
@@ -102,11 +85,19 @@ function toTransaction(
   };
 }
 
-export function buildSnapshotFromCloud(
+/**
+ * Map a CloudPortfolio + the dedicated trades/transfers feeds into the account
+ * summary + transaction list the UI renders (holdings/cash/transaction math
+ * only — no price, history, or orders).
+ */
+export function portfolioToSummary(
   portfolio: CloudPortfolio,
-  ticks: CloudTicks,
-  marketParams: MarketParams,
-): MarketSnapshot {
+  trades: CloudTrade[],
+  transfers: CloudTransfer[],
+): {
+  account: Account;
+  transactions: Transaction[];
+} {
   const holdingsRows = Array.isArray(portfolio?.holdings)
     ? portfolio.holdings
     : [];
@@ -137,12 +128,6 @@ export function buildSnapshotFromCloud(
     cashTransferred: Number(portfolio?.cashTransferred ?? 0),
   };
 
-  const trades = Array.isArray(portfolio?.recentTrades)
-    ? portfolio.recentTrades
-    : [];
-  const transfers = Array.isArray(portfolio?.recentTransfers)
-    ? portfolio.recentTransfers
-    : [];
   const transactions = [
     ...trades.map((trade) => toTransaction(trade)),
     ...transfers.map((transfer) => toTransaction(transfer)),
@@ -150,27 +135,17 @@ export function buildSnapshotFromCloud(
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 50);
 
+  return { account, transactions };
+}
+
+/**
+ * Map a CloudTicks payload into chart points (`{ price, timestamp }` in
+ * epoch ms) for MarketChart.
+ */
+export function ticksToChartPoints(ticks: CloudTicks): ChartInputPoint[] {
   const points = Array.isArray(ticks?.points) ? ticks.points : [];
-  const history = points.map((point) => ({
+  return points.map((point) => ({
     price: Number(point.price),
     timestamp: Number(point.timestamp) * 1000,
   }));
-  const lastHistoryPrice =
-    history.length > 0 ? history[history.length - 1].price : 0;
-
-  const price =
-    Number(lastHistoryPrice) ||
-    Number(holdingsRows[0]?.currentPrice ?? 0) ||
-    Number(marketParams?.basePrice ?? 0);
-
-  return {
-    price,
-    account,
-    history,
-    orders: (Array.isArray(portfolio?.openOrders) ? portfolio.openOrders : []).map(
-      toClientOrder,
-    ),
-    transactions,
-    marketParams,
-  };
 }

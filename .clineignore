@@ -3,3 +3,4 @@ client/dist/
 server/.cache/
 .git/
 *.log
+TODO.txt

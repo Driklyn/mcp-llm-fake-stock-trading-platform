@@ -30,16 +30,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Build the client in "direct" mode: bake both base URLs into the bundle.
-      # Ticks reads (GET /api/v1/ticks/*) go through the CloudFront distribution
+      # Build the client in "direct" mode: opt in via IS_DIRECT_MODE and bake
+      # both base URLs into the bundle. Ticks reads (GET /api/v1/ticks/*) and
+      # the fixed-window ledger feeds (GET /api/v1/trades/50,
+      # /api/v1/transfers/50) go through the CloudFront distribution
       # (CLOUDFRONT_URL secret — the 14s edge cache protects the 1-RCU DynamoDB
-      # table), while all dynamic routes (portfolio, trades, orders, transfers,
-      # assistant) hit the HTTP API Gateway directly (API_GATEWAY_URL secret) to
-      # fix CORS and allow zero-buffered LLM streaming. Set both secrets in the
-      # repo settings.
+      # table and the DSQL ledger), while all dynamic routes (portfolio, orders,
+      # assistant) hit the HTTP API Gateway directly (API_GATEWAY_URL secret)
+      # to fix CORS and allow zero-buffered LLM streaming. Set both secrets in
+      # the repo settings.
       - name: Build client (direct CloudFront + API Gateway mode)
         run: npm run build --workspace client
         env:
+          IS_DIRECT_MODE: "true"
           VITE_CDN_BASE_URL: ${{ secrets.CLOUDFRONT_URL }}
           VITE_API_BASE_URL: ${{ secrets.API_GATEWAY_URL }}
 

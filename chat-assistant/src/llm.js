@@ -62,7 +62,7 @@ export function normalizeTradeQuantity(rawQuantity) {
 }
 
 const VALID_TOOLS = new Set([
-  "get_account_snapshot",
+  "get_portfolio_summary",
   "get_quote",
   "buy_stock",
   "sell_stock",
@@ -195,7 +195,7 @@ export function buildTradePlan(prompt, options = {}) {
   if (
     /(portfolio|account|balance|equity|cash|holdings|invested|worth)/.test(text)
   ) {
-    return { tool: "get_account_snapshot", arguments: {} };
+    return { tool: "get_portfolio_summary", arguments: {} };
   }
 
   if (
@@ -361,7 +361,7 @@ export function buildTradePlan(prompt, options = {}) {
 
   if (!allowNetwork) {
     return {
-      tool: "get_account_snapshot",
+      tool: "get_portfolio_summary",
       arguments: {},
       fallback:
         "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",
@@ -369,7 +369,7 @@ export function buildTradePlan(prompt, options = {}) {
   }
 
   return {
-    tool: "get_account_snapshot",
+    tool: "get_portfolio_summary",
     arguments: {},
     fallback:
       "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",

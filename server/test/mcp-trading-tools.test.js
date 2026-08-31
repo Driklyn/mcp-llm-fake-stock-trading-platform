@@ -7,8 +7,6 @@ import { createTradingMcpServer } from "../src/mcp/index.js";
 function stubService() {
   return {
     getPortfolioSummary: async () => ({
-      symbol: "FAKE",
-      price: 100,
       account: {
         cashAvailable: 10000,
         holdings: 0,
@@ -20,8 +18,6 @@ function stubService() {
         totalEquity: 10000,
         cashTransferred: 0,
       },
-      history: [],
-      orders: [],
       transactions: [],
     }),
     getQuote: async () => ({ symbol: "FAKE", price: 100, history: [] }),
@@ -66,17 +62,30 @@ async function withMcpClient(service, fn) {
   }
 }
 
-test("get_account_snapshot returns the account summary as structured content", async () => {
+test("get_portfolio_summary returns the trimmed account summary as structured content", async () => {
   await withMcpClient(stubService(), async (client) => {
     const result = await client.callTool({
-      name: "get_account_snapshot",
+      name: "get_portfolio_summary",
       arguments: {},
     });
     assert.ok(result.content[0].text.includes("totalEquity"));
-    assert.equal(
-      result.structuredContent.account.cashAvailable,
-      10000,
-    );
+    assert.equal(result.structuredContent.account.cashAvailable, 10000);
+    // The account object includes every field the summary text needs.
+    for (const key of [
+      "cashAvailable",
+      "costBasis",
+      "holdings",
+      "totalEquity",
+      "totalGainsLosses",
+    ]) {
+      assert.ok(
+        key in result.structuredContent.account,
+        `expected account.${key} in the tool payload`,
+      );
+    }
+    assert.equal(result.structuredContent.price, undefined);
+    assert.equal(result.structuredContent.transactions, undefined);
+    assert.equal(result.structuredContent.orders, undefined);
   });
 });
 

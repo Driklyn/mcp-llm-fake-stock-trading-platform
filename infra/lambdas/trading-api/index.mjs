@@ -3,11 +3,12 @@
  *
  * Routes:
  *   GET  /api/v1/portfolio                   account summary (cash, holdings, cost
- *                                            basis, realized gains, equity, open
- *                                            orders, recent trades + transfers)
+ *                                            basis, realized gains, equity, invested
+ *                                            value, cash transferred)
  *   POST /api/v1/trades                      execute a market BUY/SELL against the ledger
- *   GET  /api/v1/trades                      recent trade history (?limit=N)
+ *   GET  /api/v1/trades/50                  recent trade history (fixed 50-row window, query strings ignored)
  *   POST /api/v1/transfers                   deposit (+) or withdraw (-) cash
+ *   GET  /api/v1/transfers/50               recent transfer history (fixed 50-row window, query strings ignored)
  *   POST /api/v1/orders                      place a LIMIT/STOP order
  *   GET  /api/v1/orders                      list orders (?status=open)
  *   POST /api/v1/orders/{orderId}/cancel     cancel an open order
@@ -120,12 +121,6 @@ function round2(value) {
 
 function round4(value) {
   return Math.round((Number(value) + Number.EPSILON) * 10000) / 10000;
-}
-
-function clampInt(value, min, max, fallback) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(num)));
 }
 
 function apiResponse(statusCode, body) {
@@ -442,14 +437,38 @@ async function executeTrade(pool, region, body) {
   }
 }
 
+/**
+ * Resolve the ledger read-feed window from the request path. Unknown routes
+ * return null (the handler answers 404). Query-string params are deliberately
+ * ignored — the window is fixed at 50 rows.
+ */
+export function resolveFeedWindow(event) {
+  const rawPath = event?.rawPath ?? "";
+  if (rawPath === "/api/v1/trades/50") {
+    return { feed: "trades", limit: 50 };
+  }
+  if (rawPath === "/api/v1/transfers/50") {
+    return { feed: "transfers", limit: 50 };
+  }
+  return null;
+}
+
 async function getTrades(pool, limit) {
-  const lim = clampInt(limit, 1, 500, 50);
   const { rows } = await pool.query(
     `SELECT id, symbol, side, quantity, price, created_at
      FROM trades ORDER BY id DESC LIMIT $1`,
-    [lim],
+    [limit],
   );
   return { ok: true, trades: rows };
+}
+
+async function getTransfers(pool, limit) {
+  const { rows } = await pool.query(
+    `SELECT id, amount, created_at
+     FROM transfers ORDER BY id DESC LIMIT $1`,
+    [limit],
+  );
+  return { ok: true, transfers: rows };
 }
 
 async function postTransfer(pool, body) {
@@ -767,19 +786,6 @@ async function getPortfolio(pool, region) {
   );
   const cashTransferred = round2(Number(transfersResult.rows[0]?.total ?? 0));
 
-  const ordersResult = await pool.query(
-    `SELECT id, symbol, side, type, quantity, price, status, created_at, executed_at, fill_price
-     FROM orders ORDER BY id DESC LIMIT 100`,
-  );
-  const openOrders = ordersResult.rows.filter(
-    (order) => order.status === "open",
-  );
-
-  const recentTrades = await getTrades(pool, 25);
-  const recentTransfersResult = await pool.query(
-    "SELECT id, amount, created_at FROM transfers ORDER BY id DESC LIMIT 25",
-  );
-
   return {
     ok: true,
     cash,
@@ -790,9 +796,6 @@ async function getPortfolio(pool, region) {
     investedValue,
     totalEquity: totalValue,
     cashTransferred,
-    openOrders,
-    recentTrades: recentTrades.trades,
-    recentTransfers: recentTransfersResult.rows,
     generatedAt: Math.floor(Date.now() / 1000),
   };
 }
@@ -872,11 +875,25 @@ export async function handler(event = {}) {
         await executeTrade(pool, region, parseBody(event)),
       );
     }
-    if (routeKey === "GET /api/v1/trades") {
-      return apiResponse(
-        200,
-        await getTrades(pool, event?.queryStringParameters?.limit),
-      );
+    if (routeKey === "GET /api/v1/trades/50") {
+      const window = resolveFeedWindow(event);
+      if (!window) {
+        return apiResponse(404, {
+          ok: false,
+          error: `Unknown trades route: ${event?.rawPath ?? "(no path)"}`,
+        });
+      }
+      return apiResponse(200, await getTrades(pool, window.limit));
+    }
+    if (routeKey === "GET /api/v1/transfers/50") {
+      const window = resolveFeedWindow(event);
+      if (!window) {
+        return apiResponse(404, {
+          ok: false,
+          error: `Unknown transfers route: ${event?.rawPath ?? "(no path)"}`,
+        });
+      }
+      return apiResponse(200, await getTransfers(pool, window.limit));
     }
     if (routeKey === "POST /api/v1/transfers") {
       return apiResponse(200, await postTransfer(pool, parseBody(event)));

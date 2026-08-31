@@ -82,6 +82,12 @@ variable "cloudfront_ticks_cache_ttl" {
   default     = 14
 }
 
+variable "cloudfront_ledger_cache_ttl" {
+  description = "Edge cache TTL (seconds) for GET /api/v1/trades/50 and GET /api/v1/transfers/50."
+  type        = number
+  default     = 14
+}
+
 variable "cloudfront_custom_secret_token" {
   type        = string
   description = "A secure shared passphrase between CloudFront and our ticks-fetcher Lambda."
@@ -242,7 +248,7 @@ variable "tags" {
   description = "Common resource tags."
   type        = map(string)
   default = {
-    Project    = "fake-mcp-stock-trader"
+    Project    = "mcp-llm-fake-stock-trader"
     ManagedBy  = "terraform"
     CostCenter = "free-tier"
   }

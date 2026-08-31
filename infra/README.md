@@ -22,12 +22,12 @@ inside the AWS Always Free Tier.
 
 ```mermaid
 flowchart TB
-    V["viewers"] -->|"GET /api/v1/ticks/* · 14s edge cache"| CF["CloudFront"]
+    V["viewers"] -->|"GET /api/v1/ticks/* + GET /api/v1/trades/50 + GET /api/v1/transfers/50 · 14s edge cache"| CF["CloudFront"]
     CF -->|HTTPS| GW["HTTP API Gateway<br/>(versioned /api/v1 routes)"]
 
     GW -->|"GET /api/v1/ticks/4h · GET /api/v1/ticks/latest"| FETCHER["ticks-fetcher"]
     GW -->|"POST /api/v1/ticks"| GENERATOR["ticks-generator"]
-    GW -->|"POST /api/v1/trades · GET /api/v1/trades · GET /api/v1/portfolio · POST /api/v1/transfers · POST /api/v1/orders · GET /api/v1/orders · POST /api/v1/orders/{orderId}/cancel · POST /api/v1/orders/process"| TRADING["trading-api"]
+    GW -->|"POST /api/v1/trades · GET /api/v1/trades/50 · GET /api/v1/portfolio · POST /api/v1/transfers · GET /api/v1/transfers/50 · POST /api/v1/orders · GET /api/v1/orders · POST /api/v1/orders/{orderId}/cancel · POST /api/v1/orders/process"| TRADING["trading-api"]
     GW -->|"POST /api/v1/assistant"| ASSISTANT["assistant"]
     ASSISTANT -->|"LambdaClient.invoke (direct)"| TRADING
     ASSISTANT -->|"LambdaClient.invoke (direct)"| FETCHER
@@ -95,9 +95,10 @@ flowchart TB
 | GET    | /api/v1/ticks/latest            | ticks-fetcher   | most recent realized tick; `timestamp <= now` gate; 14s edge cache                     |
 | POST   | /api/v1/ticks                   | ticks-generator | manual generation of the current minute's 4 slots                                |
 | POST   | /api/v1/trades                  | trading-api     | `{ symbol, side: BUY\|SELL, quantity, idempotencyKey? }`                         |
-| GET    | /api/v1/trades                  | trading-api     | recent trade history, `?limit=N`                                                 |
-| GET    | /api/v1/portfolio               | trading-api     | cash, holdings, cost basis, realized gains, equity, open orders, recent activity |
+| GET    | /api/v1/trades/50              | trading-api     | recent trade history, fixed 50-row window; query strings ignored; 14s edge cache |
+| GET    | /api/v1/portfolio               | trading-api     | account-only: cash, holdings, cost basis, realized gains, equity (activity via /api/v1/trades/50 + /api/v1/transfers/50) |
 | POST   | /api/v1/transfers               | trading-api     | `{ amount: +/-N, idempotencyKey? }`                                              |
+| GET    | /api/v1/transfers/50           | trading-api     | recent transfer history, fixed 50-row window; query strings ignored; 14s edge cache |
 | POST   | /api/v1/orders                  | trading-api     | `{ side, type: limit\|stop, quantity, price, idempotencyKey? }`                  |
 | GET    | /api/v1/orders                  | trading-api     | list orders, `?status=open`                                                      |
 | POST   | /api/v1/orders/{orderId}/cancel | trading-api     | cancel an open order (idempotent)                                                |
@@ -121,6 +122,11 @@ flowchart TB
   960 points, `/api/v1/ticks/latest` → 1 point) and ignores any user-supplied
   `limit`/`from` query strings. The CloudFront ticks cache policy therefore
   drops query strings from the cache key entirely.
+- `trading-api`'s read feeds work the same way: `/api/v1/trades/50` and
+  `/api/v1/transfers/50` resolve a fixed 50-row window from the path and ignore
+  `limit` query strings. CloudFront caches both at the edge (14s TTL via the
+  `ledger_cache` policy) with query strings dropped from the cache key, so the
+  direct-mode client's transaction feed is shielded by the edge cache too.
 - DSQL connections use the PostgreSQL wire protocol on port 5432 with an IAM
   db-connect token (`generateDbConnectAdminAuthToken`); SSL is mandatory. The
   Lambda IAM roles carry `dsql:Connect` on the cluster ARN (NOT an HTTP Data

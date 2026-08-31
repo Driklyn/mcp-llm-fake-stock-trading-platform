@@ -15,17 +15,18 @@ export function createTradingMcpServer({ service = account } = {}) {
   });
 
   server.registerTool(
-    "get_account_snapshot",
+    "get_portfolio_summary",
     {
       description:
-        "Get the current account snapshot, including cash, holdings, cost basis, realized gains, unrealized gains/losses, and total equity.",
+        "Get the current portfolio summary: cash, invested amount (cost basis), gains/losses, holdings, and total equity.",
       inputSchema: {},
     },
     async () => {
       const summary = await service.getPortfolioSummary();
+      const payload = { account: summary.account };
       return {
-        content: [{ type: "text", text: JSON.stringify(summary, null, 2) }],
-        structuredContent: summary,
+        content: [{ type: "text", text: JSON.stringify(payload, null, 2) }],
+        structuredContent: payload,
       };
     },
   );

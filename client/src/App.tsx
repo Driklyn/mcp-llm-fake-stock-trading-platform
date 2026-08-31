@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AppShell,
   Layout,
@@ -15,9 +15,10 @@ import MarketChart from "./components/MarketChart";
 import PortfolioPanel from "./components/PortfolioPanel";
 import TopBar from "./components/TopBar";
 import type {
+  Account,
   AssistantPayload,
+  ChartInputPoint,
   ChatMessage,
-  MarketSnapshot,
   OrderType,
   SocketMessage,
   TradeSide,
@@ -26,32 +27,32 @@ import type {
 import {
   BLOCK_SECONDS,
   DEFAULT_PARAMS,
-  blockForTime,
   buildPriceSeries,
   getPriceAtTime,
   latestRealizedTick,
-  type MarketParams,
 } from "./utils/marketPrice";
-import {
-  apiBaseUrl,
-  assistantUrl,
-  isDirectMode,
-  wsUrl,
-} from "./config";
+import { assistantUrl, isDirectMode, wsUrl } from "./config";
 import {
   fetchLatestTick,
   fetchPortfolio,
+  fetchPortfolioSummary,
   fetchTicks4h,
+  fetchTrades,
+  fetchTransactions,
+  fetchTransfers,
   placeOrder as cloudPlaceOrder,
   postTrade,
   postTransfer,
   type CloudPortfolio,
   type CloudTicks,
+  type CloudTrade,
+  type CloudTransfer,
 } from "./api/cloud";
 import {
-  buildSnapshotFromCloud,
   mergeCloudTicks,
-} from "./api/snapshot";
+  portfolioToSummary,
+  ticksToChartPoints,
+} from "./api/account";
 
 type TradeResultPayload = AssistantPayload & {
   executedAmount?: number;
@@ -61,10 +62,12 @@ type TradeResultPayload = AssistantPayload & {
 };
 
 function App() {
-  const [snapshot, setSnapshot] = useState<MarketSnapshot | null>(null);
+  const [account, setAccount] = useState<Account | null>(null);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [chartPoints, setChartPoints] = useState<ChartInputPoint[]>([]);
+  const [price, setPrice] = useState<number | null>(null);
   const [refreshSeconds, setRefreshSeconds] = useState(15);
   const [message, setMessage] = useState("Connected to market");
-  const [marketParams, setMarketParams] = useState<MarketParams | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([
@@ -78,9 +81,10 @@ function App() {
     useState<AssistantPayload | null>(null);
   const [isChatWorking, setIsChatWorking] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
-  // Direct mode (GitHub Pages): accumulated 4h tick window. Refreshes append
-  // fresh ticks via mergeCloudTicks instead of replacing the whole window.
-  const directTicksRef = useRef<CloudTicks | null>(null);
+  // Retained 4h tick window in both modes. Proxy-mode WS `tick` messages and
+  // direct-mode polling both append fresh ticks via mergeCloudTicks instead of
+  // replacing the whole window.
+  const ticksRef = useRef<CloudTicks | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -90,28 +94,21 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  const currentBlock =
-    marketParams == null ? null : blockForTime(nowMs / 1000);
-
-  const livePrice = useMemo(
-    () =>
-      marketParams && currentBlock != null
-        ? getPriceAtTime(currentBlock * BLOCK_SECONDS, marketParams)
-        : null,
-    [marketParams, currentBlock],
-  );
-
   const CHART_WINDOW_BLOCKS = 960; // 4 hours of 15-second blocks
 
-  const chartPoints = useMemo(() => {
-    if (!marketParams || currentBlock == null) return [];
-    const endSeconds = currentBlock * BLOCK_SECONDS;
-    return buildPriceSeries(
-      endSeconds - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
-      endSeconds,
-      marketParams,
-    );
-  }, [marketParams, currentBlock]);
+  // Deterministic local fallback for the market feed — used only when the
+  // ticks/price API calls fail. Produces the same series the server would.
+  const marketFallback = (nowMs: number) => {
+    const nowSeconds = nowMs / 1000;
+    return {
+      price: getPriceAtTime(nowSeconds, DEFAULT_PARAMS),
+      history: buildPriceSeries(
+        nowSeconds - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
+        nowSeconds,
+        DEFAULT_PARAMS,
+      ),
+    };
+  };
 
   // Direct-mode helpers: deterministic local fallbacks when the cloud ticks
   // endpoints are unreachable, plus the shared merge-then-render pipeline.
@@ -128,7 +125,8 @@ function App() {
     return {
       symbol: "FAKE",
       generatedAt: nowSeconds,
-      from: points[0]?.timestamp ?? endBlock - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
+      from:
+        points[0]?.timestamp ?? endBlock - CHART_WINDOW_BLOCKS * BLOCK_SECONDS,
       to: points[points.length - 1]?.timestamp ?? endBlock,
       count: points.length,
       points,
@@ -147,15 +145,45 @@ function App() {
     };
   };
 
-  const renderDirectSnapshot = (
-    portfolio: CloudPortfolio,
-    incoming: CloudTicks,
-  ) => {
-    const merged = mergeCloudTicks(directTicksRef.current, incoming);
-    directTicksRef.current = merged;
-    setSnapshot(buildSnapshotFromCloud(portfolio, merged, DEFAULT_PARAMS));
-    setMarketParams(DEFAULT_PARAMS);
+  // Render a merged CloudTicks window: chart points for MarketChart plus the
+  // latest point as the current price.
+  const renderMarket = (mergedTicks: CloudTicks) => {
+    ticksRef.current = mergedTicks;
+    setChartPoints(ticksToChartPoints(mergedTicks));
+    const points = Array.isArray(mergedTicks.points) ? mergedTicks.points : [];
+    const last = points[points.length - 1] ?? null;
+    setPrice(last != null ? Number(last.price) : null);
     setRefreshSeconds(15);
+  };
+
+  const renderAccount = (
+    portfolio: CloudPortfolio,
+    trades: CloudTrade[],
+    transfers: CloudTransfer[],
+  ) => {
+    const summary = portfolioToSummary(portfolio, trades, transfers);
+    setAccount(summary.account);
+    setTransactions(summary.transactions);
+    setRefreshSeconds(15);
+  };
+
+  // Direct mode pulls all three feeds itself: the account-only portfolio plus
+  // the dedicated trades/transfers endpoints. A failing trades/transfers feed
+  // falls back to [] so the account still renders (mirrors proxy mode's
+  // Promise.allSettled philosophy).
+  const fetchDirectAccount = async (signal?: AbortSignal) => {
+    const [portfolio, trades, transfers] = await Promise.all([
+      fetchPortfolio(signal),
+      fetchTrades(signal).catch(() => ({
+        ok: true,
+        trades: [] as CloudTrade[],
+      })),
+      fetchTransfers(signal).catch(() => ({
+        ok: true,
+        transfers: [] as CloudTransfer[],
+      })),
+    ]);
+    return { portfolio, trades: trades.trades, transfers: transfers.transfers };
   };
 
   useEffect(() => {
@@ -167,44 +195,46 @@ function App() {
       // Direct mode (client-only / GitHub Pages): poll the CloudFront ledger
       // and merge fresh ticks into the retained 4h window. There is no
       // WebSocket through the CloudFront HTTP distribution.
-      const refreshSnapshot = async () => {
+      const refreshDirect = async () => {
         try {
-          const portfolio = await fetchPortfolio(signal);
+          const { portfolio, trades, transfers } =
+            await fetchDirectAccount(signal);
           let incoming: CloudTicks;
           try {
             incoming = await fetchLatestTick(signal);
           } catch {
             incoming = localFallbackLatest(Math.floor(Date.now() / 1000));
           }
-          if (!cancelled) renderDirectSnapshot(portfolio, incoming);
-        } catch (error) {
           if (!cancelled) {
-            setMessage("Market connection is reconnecting...");
-            setSnapshot((previous) => previous ?? null);
+            renderAccount(portfolio, trades, transfers);
+            renderMarket(mergeCloudTicks(ticksRef.current, incoming));
           }
+        } catch (error) {
+          if (!cancelled) setMessage("Market connection is reconnecting...");
         }
       };
 
       const loadInitial = async () => {
         try {
-          const portfolio = await fetchPortfolio(signal);
+          const { portfolio, trades, transfers } =
+            await fetchDirectAccount(signal);
           let incoming: CloudTicks;
           try {
             incoming = await fetchTicks4h(signal);
           } catch {
             incoming = localFallback4h(Math.floor(Date.now() / 1000));
           }
-          if (!cancelled) renderDirectSnapshot(portfolio, incoming);
-        } catch (error) {
           if (!cancelled) {
-            setMessage("Market connection is reconnecting...");
-            setSnapshot((previous) => previous ?? null);
+            renderAccount(portfolio, trades, transfers);
+            renderMarket(mergeCloudTicks(ticksRef.current, incoming));
           }
+        } catch (error) {
+          if (!cancelled) setMessage("Market connection is reconnecting...");
         }
       };
 
       loadInitial();
-      const pollId = setInterval(refreshSnapshot, 15_000);
+      const pollId = setInterval(refreshDirect, 15_000);
       return () => {
         cancelled = true;
         controller.abort();
@@ -212,28 +242,48 @@ function App() {
       };
     }
 
-    const loadInitialSnapshot = async () => {
-      try {
-        const response = await fetch(`${apiBaseUrl}/api/snapshot`, { signal });
-        if (!response.ok) {
-          throw new Error("Snapshot unavailable");
-        }
+    // Proxy mode: load account, transactions, and the market feed
+    // independently so one failing feed can't take down the others (an account
+    // failure keeps the loading branch; a market failure falls back to the
+    // deterministic engine). Ticks come from the Node server's /api/ticks/*
+    // passthrough.
+    const loadInitialState = async () => {
+      const [summaryResult, transactionsResult, ticks4hResult, latestResult] =
+        await Promise.allSettled([
+          fetchPortfolioSummary(signal),
+          fetchTransactions(signal),
+          fetchTicks4h(signal),
+          fetchLatestTick(signal),
+        ]);
+      if (cancelled) return;
 
-        const data: MarketSnapshot = await response.json();
-        if (!cancelled && data) {
-          setSnapshot(data);
-          setMarketParams(data.marketParams ?? null);
-          setRefreshSeconds(15);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setSnapshot(null);
-          setMessage("Market connection is reconnecting...");
-        }
+      if (summaryResult.status === "fulfilled") {
+        setAccount(summaryResult.value.account);
+      } else {
+        setMessage("Market connection is reconnecting...");
       }
+      if (transactionsResult.status === "fulfilled") {
+        setTransactions(transactionsResult.value.transactions);
+      }
+      if (ticks4hResult.status === "fulfilled") {
+        if (latestResult.status === "fulfilled") {
+          renderMarket(
+            mergeCloudTicks(ticks4hResult.value, latestResult.value),
+          );
+        } else {
+          renderMarket(ticks4hResult.value);
+        }
+      } else if (latestResult.status === "fulfilled") {
+        renderMarket(latestResult.value);
+      } else {
+        const fallback = marketFallback(Date.now());
+        setChartPoints(fallback.history);
+        setPrice(fallback.price);
+      }
+      setRefreshSeconds(15);
     };
 
-    loadInitialSnapshot();
+    loadInitialState();
 
     const ws = new WebSocket(wsUrl);
     socketRef.current = ws;
@@ -241,13 +291,26 @@ function App() {
     ws.onmessage = (event) => {
       const data: SocketMessage = JSON.parse(event.data);
 
-      if (data.type === "snapshot") {
-        const payload = data.payload as unknown as MarketSnapshot & {
-          marketParams?: MarketParams;
+      if (data.type === "account") {
+        const payload = data.payload as unknown as { account?: Account };
+        if (payload?.account) {
+          setAccount(payload.account);
+          setRefreshSeconds(15);
+        }
+      }
+
+      if (data.type === "transactions") {
+        const payload = data.payload as unknown as {
+          transactions?: Transaction[];
         };
-        setSnapshot(payload);
-        setMarketParams((previous) => payload?.marketParams ?? previous);
-        setRefreshSeconds(15);
+        if (Array.isArray(payload?.transactions)) {
+          setTransactions(payload.transactions);
+        }
+      }
+
+      if (data.type === "tick") {
+        const tick = data.payload as unknown as CloudTicks;
+        renderMarket(mergeCloudTicks(ticksRef.current, tick));
       }
 
       if (data.type === "trade-result") {
@@ -447,19 +510,20 @@ function App() {
     }
   };
 
-  const refreshSnapshot = async () => {
+  const refreshDirect = async () => {
     if (!isDirectMode) return;
     try {
-      const portfolio = await fetchPortfolio();
+      const { portfolio, trades, transfers } = await fetchDirectAccount();
       let incoming: CloudTicks;
       try {
         incoming = await fetchLatestTick();
       } catch {
         incoming = localFallbackLatest(Math.floor(Date.now() / 1000));
       }
-      renderDirectSnapshot(portfolio, incoming);
+      renderAccount(portfolio, trades, transfers);
+      renderMarket(mergeCloudTicks(ticksRef.current, incoming));
     } catch {
-      // Keep the last known snapshot; the caller already surfaced the result.
+      // Keep the last known state; the caller already surfaced the result.
     }
   };
 
@@ -467,7 +531,9 @@ function App() {
     const socket = socketRef.current;
 
     if (isDirectMode) {
-      const tradeValue = quantity * (livePrice ?? 0);
+      const currentPrice =
+        price ?? getPriceAtTime(nowMs / 1000, DEFAULT_PARAMS);
+      const tradeValue = quantity * currentPrice;
       if (
         quantity >= 10 ||
         (Number.isFinite(tradeValue) && tradeValue >= 1000)
@@ -486,7 +552,7 @@ function App() {
           quantity,
         );
         setMessage(result?.ok ? "Trade executed successfully" : "Trade failed");
-        await refreshSnapshot();
+        await refreshDirect();
       } catch (error) {
         setMessage((error as Error)?.message ?? "Trade failed");
       }
@@ -509,7 +575,9 @@ function App() {
     const socket = socketRef.current;
 
     if (isDirectMode) {
-      const tradeValue = quantity * (livePrice ?? 0);
+      const currentPrice =
+        price ?? getPriceAtTime(nowMs / 1000, DEFAULT_PARAMS);
+      const tradeValue = quantity * currentPrice;
       if (
         quantity >= 10 ||
         (Number.isFinite(tradeValue) && tradeValue >= 1000)
@@ -532,7 +600,7 @@ function App() {
         setMessage(
           `Placed ${orderType} ${side} order for ${quantity} shares at $${price.toFixed(2)}.`,
         );
-        await refreshSnapshot();
+        await refreshDirect();
       } catch (error) {
         setMessage((error as Error)?.message ?? "Failed to place order");
       }
@@ -565,7 +633,7 @@ function App() {
               : "Withdrawal completed"
             : "Transfer failed",
         );
-        await refreshSnapshot();
+        await refreshDirect();
       } catch (error) {
         setMessage((error as Error)?.message ?? "Transfer failed");
       }
@@ -578,9 +646,6 @@ function App() {
     }
     socket.send(JSON.stringify({ type: "transfer", amount: signedAmount }));
   };
-
-  const currentSnapshot = snapshot;
-  const transactions: Transaction[] = currentSnapshot?.transactions ?? [];
 
   const chatTabContent = (
     <ChatPanel
@@ -610,7 +675,7 @@ function App() {
     { id: "manual", label: "Manual", content: manualTabContent },
   ];
 
-  if (!currentSnapshot) {
+  if (!account) {
     return (
       <AppShell>
         <TopBar />
@@ -632,7 +697,7 @@ function App() {
           </Panel>
         </Layout>
 
-        <TransactionsHistory transactions={[]} />
+        <TransactionsHistory transactions={transactions} />
       </AppShell>
     );
   }
@@ -643,11 +708,11 @@ function App() {
 
       <Layout>
         <Panel wide>
-          <PortfolioPanel snapshot={currentSnapshot} />
+          <PortfolioPanel account={account} />
 
           <MarketChart
             points={chartPoints}
-            price={livePrice}
+            price={price}
             refreshSeconds={refreshSeconds}
           />
         </Panel>

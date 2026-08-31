@@ -1,5 +1,5 @@
 {
-  "name": "fake-mcp-stock-trader",
+  "name": "mcp-llm-fake-stock-trader",
   "private": true,
   "version": "1.0.0",
   "workspaces": [
@@ -18,6 +18,7 @@
     "dev:server": "npm run dev --workspace server",
     "build": "npm run build --workspace client",
     "build:assistant": "npm run build --workspace infra/lambdas/assistant",
-    "test": "npm test --workspace server && npm test --workspace chat-assistant && npm test --workspace infra/lambdas/assistant"
+    "test": "npm test --workspace server && npm test --workspace chat-assistant && npm test --workspace infra/lambdas/assistant",
+    "typecheck": "npm run typecheck --workspace client"
   }
 }

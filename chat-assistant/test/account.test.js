@@ -42,6 +42,12 @@ function stubClient(overrides = {}) {
         ],
       };
     },
+    async fetchTrades() {
+      return { ok: true, trades: [...portfolio.recentTrades] };
+    },
+    async fetchTransfers() {
+      return { ok: true, transfers: [...portfolio.recentTransfers] };
+    },
     async postTrade({ side, quantity }) {
       const fillPrice = 100;
       if (side === "BUY") {
@@ -116,21 +122,21 @@ function stubClient(overrides = {}) {
   return client;
 }
 
-test("getPortfolioSummary maps the cloud portfolio into the UI shape", async () => {
+test("getPortfolioSummary maps the cloud portfolio into the summary shape", async () => {
   const service = createAccountService({ client: stubClient(), now: () => 0 });
   const summary = await service.getPortfolioSummary({ force: true });
 
-  assert.equal(summary.symbol, "FAKE");
-  assert.equal(summary.price, 100);
+  // The full 9-field account object is preserved for finalize()/transfer().
   assert.equal(summary.account.cashAvailable, 10000);
   assert.equal(summary.account.totalEquity, 10000);
   assert.equal(summary.account.cashTransferred, 0);
-  assert.equal(summary.holdings, 0);
-  // ticks (epoch seconds) are mapped to milliseconds for the chart
-  assert.equal(summary.history[0].timestamp, 1787529600 * 1000);
-  assert.equal(summary.history[0].price, 99);
-  assert.deepEqual(summary.orders, []);
-  assert.deepEqual(summary.transactions, []);
+  assert.equal(summary.account.holdings, 0);
+  assert.equal(summary.transactions, undefined);
+  // Quote/price data is no longer part of the summary shape.
+  assert.equal(summary.price, undefined);
+  assert.equal(summary.symbol, undefined);
+  assert.equal(summary.history, undefined);
+  assert.equal(summary.orders, undefined);
 });
 
 test("init primes the cache from the cloud", async () => {
@@ -213,5 +219,33 @@ test("cancelOrder and listOrders delegate to the cloud", async () => {
   const cancelled = await service.cancelOrder("1");
   assert.equal(cancelled.status, "cancelled");
   assert.equal((await service.listOrders()).orders.length, 0);
+});
+
+test("getTransactions merges trades and transfers into one feed", async () => {
+  const client = stubClient();
+  const service = createAccountService({ client, now: () => 0 });
+
+  // No activity yet.
+  assert.deepEqual(await service.getTransactions({ force: true }), []);
+
+  // Add a trade and a deposit to the stub portfolio.
+  await client.postTrade({ side: "BUY", quantity: 5 });
+  await client.postTransfer({ amount: 2500 });
+
+  const transactions = await service.getTransactions({ force: true });
+  assert.equal(transactions.length, 2);
+
+  const trade = transactions.find((entry) => entry.id === "trade-1");
+  assert.equal(trade.kind, "buy");
+  assert.equal(trade.side, "buy");
+  assert.equal(trade.quantity, 5);
+  assert.equal(trade.price, 100);
+  assert.equal(trade.amount, 500);
+  assert.equal(trade.timestamp, 1787529630 * 1000);
+
+  const transfer = transactions.find((entry) => entry.id === "transfer-1");
+  assert.equal(transfer.kind, "deposit");
+  assert.equal(transfer.amount, 2500);
+  assert.equal(transfer.timestamp, 1787529630 * 1000);
 });
 

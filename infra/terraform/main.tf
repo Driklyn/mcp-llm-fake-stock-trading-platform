@@ -5,7 +5,8 @@
 # subnets, route tables, internet gateways, or NAT Gateways anywhere in this
 # file — every resource talks over AWS-managed public endpoints.
 #
-#   viewers ──▶ CloudFront (14s edge cache on GET /api/v1/ticks/*)
+#   viewers ──▶ CloudFront (14s edge cache on GET /api/v1/ticks/* and the
+#               /api/v1/trades/50 + /api/v1/transfers/50 ledger feeds)
 #                   │
 #                   ▼
 #           HTTP API Gateway (versioned /api/v1 financial routes)
@@ -649,13 +650,19 @@ resource "aws_apigatewayv2_route" "portfolio_get" {
 
 resource "aws_apigatewayv2_route" "trades_get" {
   api_id    = aws_apigatewayv2_api.market_api.id
-  route_key = "GET /api/v1/trades"
+  route_key = "GET /api/v1/trades/50"
   target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
 }
 
 resource "aws_apigatewayv2_route" "transfers_post" {
   api_id    = aws_apigatewayv2_api.market_api.id
   route_key = "POST /api/v1/transfers"
+  target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
+}
+
+resource "aws_apigatewayv2_route" "transfers_get" {
+  api_id    = aws_apigatewayv2_api.market_api.id
+  route_key = "GET /api/v1/transfers/50"
   target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
 }
 
@@ -752,8 +759,39 @@ resource "aws_cloudfront_cache_policy" "ticks_cache" {
   }
 }
 
-# No caching anywhere else: POST /api/v1/ticks, POST /api/v1/trades, and
-# GET /api/v1/portfolio must always reach the origin.
+# 14-second edge TTL for the ledger read feeds. The window is fixed by the
+# route (/api/v1/trades/50, /api/v1/transfers/50) and the lambda ignores query
+# strings, so none are kept in the cache key — only the Origin header is kept so
+# CORS headers are never mixed across viewers.
+resource "aws_cloudfront_cache_policy" "ledger_cache" {
+  name        = "market-ledger-cache-policy"
+  comment     = "14-second edge TTL for GET /api/v1/trades/50 and /api/v1/transfers/50"
+  min_ttl     = var.cloudfront_ledger_cache_ttl
+  default_ttl = var.cloudfront_ledger_cache_ttl
+  max_ttl     = var.cloudfront_ledger_cache_ttl
+
+  parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_brotli = false
+    enable_accept_encoding_gzip   = true
+
+    cookies_config {
+      cookie_behavior = "none"
+    }
+    headers_config {
+      header_behavior = "whitelist"
+      headers {
+        items = ["Origin"]
+      }
+    }
+    query_strings_config {
+      query_string_behavior = "none"
+    }
+  }
+}
+
+# No caching anywhere else: POST /api/v1/ticks, POST /api/v1/trades,
+# GET /api/v1/portfolio, POST /api/v1/transfers, and the order routes must
+# always reach the origin.
 resource "aws_cloudfront_cache_policy" "no_cache" {
   name        = "market-no-cache-policy"
   comment     = "Disable caching for trade, portfolio, and POST routes"
@@ -776,7 +814,7 @@ resource "aws_cloudfront_cache_policy" "no_cache" {
 
 resource "aws_cloudfront_origin_request_policy" "market_api" {
   name    = "market-api-origin-request-policy"
-  comment = "Forward only Origin and limit (trades need it) to the API Gateway origin"
+  comment = "Forward only Origin to the API Gateway origin"
 
   cookies_config {
     cookie_behavior = "none"
@@ -788,10 +826,7 @@ resource "aws_cloudfront_origin_request_policy" "market_api" {
     }
   }
   query_strings_config {
-    query_string_behavior = "whitelist"
-    query_strings {
-      items = ["limit"]
-    }
+    query_string_behavior = "none"
   }
 }
 
@@ -839,6 +874,29 @@ resource "aws_cloudfront_distribution" "market_edge" {
     allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods           = ["GET", "HEAD"]
     cache_policy_id          = aws_cloudfront_cache_policy.ticks_cache.id
+    origin_request_policy_id = aws_cloudfront_origin_request_policy.market_api.id
+    compress                 = true
+  }
+
+  # Fixed-window ledger feeds: same 14s edge cache treatment as the ticks.
+  ordered_cache_behavior {
+    path_pattern             = "/api/v1/trades/50"
+    target_origin_id         = "market-api-gateway"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = aws_cloudfront_cache_policy.ledger_cache.id
+    origin_request_policy_id = aws_cloudfront_origin_request_policy.market_api.id
+    compress                 = true
+  }
+
+  ordered_cache_behavior {
+    path_pattern             = "/api/v1/transfers/50"
+    target_origin_id         = "market-api-gateway"
+    viewer_protocol_policy   = "redirect-to-https"
+    allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods           = ["GET", "HEAD"]
+    cache_policy_id          = aws_cloudfront_cache_policy.ledger_cache.id
     origin_request_policy_id = aws_cloudfront_origin_request_policy.market_api.id
     compress                 = true
   }

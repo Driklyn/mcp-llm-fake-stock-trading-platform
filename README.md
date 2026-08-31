@@ -1,4 +1,4 @@
-# Fake MCP Stock Trading Platform
+# MCP+LLM Fake Stock Trading Platform
 
 A full-stack fake stock trading demo. A Node.js server simulates a market and exposes
 it through a WebSocket live feed, an MCP tool layer, and an optional LLM-powered chat
@@ -8,7 +8,7 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 ## Highlights
 
 - Simulated `FAKE` ticker with a bounded random-walk price that ticks every 15 seconds
-- Real-time market feed over WebSocket (`snapshot` and `market-tick` messages)
+- Real-time market feed over WebSocket (`account`, `transactions`, and `tick` messages)
 - Portfolio tracking: cash, holdings, cost basis, realized/unrealized gains, total equity
 - Market orders plus limit and stop orders that execute when the price crosses the trigger
 - Large-trade confirmation flow (10+ shares or $1,000+ value) across chat, WebSocket, and MCP
@@ -16,7 +16,9 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 - Deterministic natural-language intent parser, optionally backed by a local Ollama
   model or an OpenAI-compatible LLM (e.g. OpenRouter free tier)
 - Account ledger held in Aurora DSQL by the serverless `infra/` stack (`trading-api`);
-  the local server is a stateless proxy over it
+  the local server is a stateless proxy over it. The cloud `GET /api/v1/portfolio`
+  endpoint is account-only — transactions come from the dedicated `GET /api/v1/trades`
+  and `GET /api/v1/transfers` endpoints
 - Canvas-based price chart with chart-data processing in a Web Worker
 - A small Vanilla Extract design-system package (`ui`) shared with the client
 
@@ -24,12 +26,12 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 
 This project is an npm workspaces monorepo:
 
-| Package         | Path                  | Description                                                                                       |
-| --------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
-| `server`        | `server/`             | Express + WebSocket proxy over the deployed `trading-api` ledger, MCP layer, chat assistant route |
-| `client`        | `client/`             | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)                    |
-| `ui`            | `ui/`                 | Shared React component library and design tokens built with Vanilla Extract                        |
-| `chat-assistant`| `chat-assistant/`     | Host-agnostic chat assistant (LLM planner, tool execution, pending confirmations) shared by the dev server and the production Lambda |
+| Package          | Path              | Description                                                                                                                          |
+| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `server`         | `server/`         | Express + WebSocket proxy over the deployed `trading-api` ledger, MCP layer, chat assistant route                                    |
+| `client`         | `client/`         | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)                                                      |
+| `ui`             | `ui/`             | Shared React component library and design tokens built with Vanilla Extract                                                          |
+| `chat-assistant` | `chat-assistant/` | Host-agnostic chat assistant (LLM planner, tool execution, pending confirmations) shared by the dev server and the production Lambda |
 
 ## Local Development
 
@@ -48,9 +50,11 @@ stack (`infra/`) — the local server is a **stateless proxy** over
 5. Open http://localhost:5173
 
 The server listens on port 3001 and serves the REST, WebSocket, and MCP HTTP
-endpoints. Every account read and mutation is delegated to trading-api; the price
-feed comes from `GET /api/v1/ticks/4h` (windowed history) and `GET /api/v1/ticks/latest`
-(current price), and the quote/snapshot are cached for 15s.
+endpoints. Every account read and mutation is delegated to trading-api. Account
+state is split into independently-queryable `GET /api/portfolio` (account
+summary) and `GET /api/transactions` (recent activity); the price feed comes
+from `GET /api/v1/ticks/4h` (windowed history) and `GET /api/v1/ticks/latest`
+(current price). Quotes and summaries are cached for 15s.
 
 ### Scripts
 
@@ -104,7 +108,7 @@ Or connect through the main server's streamable HTTP transport at `POST /mcp` (w
 
 ### Tools
 
-- `get_account_snapshot` — cash, holdings, cost basis, gains/losses, total equity
+- `get_portfolio_summary` — cash, invested (cost basis), gains/losses, holdings, total equity
 - `get_quote` — current `FAKE` price and recent history
 - `buy_stock` — market buy of `FAKE` shares
 - `sell_stock` — market sell of `FAKE` shares
@@ -134,7 +138,7 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 - Market buys and sells (by share count or dollar amount) executed by trading-api
 - Limit and stop orders that trading-api fills reactively against the live price whenever a new tick arrives
 - Large-trade confirmation (10+ shares or $1,000+ value) before execution
-- Portfolio snapshot including invested vs. uninvested cash and gains/losses
+- Portfolio stats including invested vs. uninvested cash and gains/losses
 - Transaction history with status-aware, sortable rows
 - One shared ledger: every path (WebSocket, REST, MCP) writes through to Aurora DSQL
 
@@ -164,7 +168,8 @@ What changes in direct mode:
   `GET /api/v1/ticks/latest`. If either endpoint is unreachable, the
   deterministic engine fills the gap with locally-generated ticks (identical
   seed/params), so the chart never freezes.
-- The price chart stays deterministic/local — same engine as proxy mode.
+- The chart renders the merged API ticks (same retained-window logic as proxy
+  mode); the deterministic engine only fills gaps when the ticks API is down.
 - Manual trading calls the REST mutations directly with per-request
   `idempotencyKey`s; large trades (10+ shares or $1,000+) confirm in-browser.
 - Chat posts to `<base>/api/v1/assistant` — served by the deployed `assistant`

@@ -5,6 +5,7 @@ import {
   applyFill,
   foldTradeLedger,
   orderTriggered,
+  resolveFeedWindow,
 } from "../index.mjs";
 
 /**
@@ -71,6 +72,28 @@ test("orderTriggered applies limit and stop rules", () => {
   assert.equal(orderTriggered({ type: "stop", side: "BUY", price: 120 }, 119), false);
   assert.equal(orderTriggered({ type: "stop", side: "SELL", price: 80 }, 79), true);
   assert.equal(orderTriggered({ type: "stop", side: "SELL", price: 80 }, 81), false);
+});
+
+test("resolveFeedWindow maps the fixed /50 feed routes", () => {
+  assert.deepEqual(resolveFeedWindow({ rawPath: "/api/v1/trades/50" }), {
+    feed: "trades",
+    limit: 50,
+  });
+  assert.deepEqual(resolveFeedWindow({ rawPath: "/api/v1/transfers/50" }), {
+    feed: "transfers",
+    limit: 50,
+  });
+});
+
+test("resolveFeedWindow returns null for unknown, bare, or other-window routes", () => {
+  assert.equal(resolveFeedWindow({}), null);
+  assert.equal(resolveFeedWindow({ rawPath: "" }), null);
+  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/trades" }), null);
+  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/transfers" }), null);
+  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/trades/100" }), null);
+  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/transfers/100" }), null);
+  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/ticks/4h" }), null);
+  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/portfolio" }), null);
 });
 
 test("applyFill buys shares and reduces cash", async () => {

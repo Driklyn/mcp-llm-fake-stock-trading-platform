@@ -13,8 +13,6 @@ function stubAccount(overrides = {}) {
   return {
     getQuote: async () => ({ symbol: "FAKE", price: 100, history: [] }),
     getPortfolioSummary: async () => ({
-      symbol: "FAKE",
-      price: 100,
       account: {
         cashAvailable: 10000,
         holdings: 0,
@@ -26,8 +24,6 @@ function stubAccount(overrides = {}) {
         totalEquity: 10000,
         cashTransferred: 0,
       },
-      history: [],
-      orders: [],
       transactions: [],
     }),
     buy: async (quantity) => ({

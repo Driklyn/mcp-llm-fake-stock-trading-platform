@@ -22,7 +22,8 @@ export function requiresConfirmationForTradeValue(quantity, price) {
 
 export function createAssistant({ account, pendingStore, llm = {} } = {}) {
   if (!account) throw new Error("createAssistant requires an account service.");
-  if (!pendingStore) throw new Error("createAssistant requires a pendingStore.");
+  if (!pendingStore)
+    throw new Error("createAssistant requires a pendingStore.");
 
   async function currentPrice() {
     const quote = await account.getQuote();
@@ -33,7 +34,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
     const tool = plan?.tool;
     const pricePerShare = await currentPrice();
 
-    if (tool === null) {
+    if (!tool) {
       return {
         plan,
         payload: null,
@@ -44,22 +45,12 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       };
     }
 
-    if (!tool) {
-      return {
-        plan: { tool: "get_account_snapshot", arguments: {} },
-        payload: await account.getPortfolioSummary(),
-        text:
-          fallbackText ??
-          "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.",
-      };
-    }
-
-    if (tool === "get_account_snapshot") {
+    if (tool === "get_portfolio_summary") {
       const summary = await account.getPortfolioSummary();
       return {
         plan,
-        payload: summary,
-        text: `Portfolio snapshot: cash $${Number(summary.account.cashAvailable ?? 0).toFixed(2)}, holdings ${summary.account.holdings}, invested $${Number(summary.account.costBasis ?? 0).toFixed(2)}, total equity $${Number(summary.account.totalEquity ?? 0).toFixed(2)}, gains/losses $${Number(summary.totalGainsLosses ?? 0).toFixed(2)}.`,
+        payload: { account: summary.account },
+        text: `Portfolio summary: cash $${Number(summary.account.cashAvailable ?? 0).toFixed(2)}, invested $${Number(summary.account.costBasis ?? 0).toFixed(2)}, gains/losses $${Number(summary.account.totalGainsLosses ?? 0).toFixed(2)}, holdings ${summary.account.holdings}, total equity $${Number(summary.account.totalEquity ?? 0).toFixed(2)}.`,
       };
     }
 
@@ -456,7 +447,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       });
 
       const plan = response?.plan ?? {
-        tool: "get_account_snapshot",
+        tool: "get_portfolio_summary",
         arguments: {},
       };
       // If this was a natural-language confirmation and the assistant produced
@@ -468,7 +459,8 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
         hasPending
       ) {
         const last = await pendingStore.mostRecent();
-        if (last?.confirmationId) await pendingStore.remove(last.confirmationId);
+        if (last?.confirmationId)
+          await pendingStore.remove(last.confirmationId);
       }
       const fallbackText =
         response?.text ??
@@ -488,7 +480,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       return {
         status: 500,
         body: {
-          plan: { tool: "get_account_snapshot", arguments: {} },
+          plan: { tool: "get_portfolio_summary", arguments: {} },
           text: "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",
         },
       };
@@ -497,8 +489,3 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
 
   return { handleRequest, buildChatResponse, currentPrice };
 }
-
-
-
-
-

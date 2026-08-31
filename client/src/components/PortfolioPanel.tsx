@@ -1,13 +1,11 @@
 import { Stat, StatsGrid } from "ui";
-import type { MarketSnapshot } from "../types";
+import type { Account } from "../types";
 
 export type PortfolioPanelProps = {
-  snapshot: MarketSnapshot;
+  account: Account;
 };
 
-export default function PortfolioPanel({ snapshot }: PortfolioPanelProps) {
-  const { account } = snapshot;
-
+export default function PortfolioPanel({ account }: PortfolioPanelProps) {
   return (
     <>
       <h2>Portfolio</h2>

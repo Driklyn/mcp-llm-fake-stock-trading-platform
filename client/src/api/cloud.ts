@@ -3,11 +3,14 @@
  * in "direct" mode (GitHub Pages build) to hit the `/api/v1/*` endpoints
  * directly — no Node proxy server required.
  *
- * Dual-endpoint routing: GET /api/v1/ticks/* goes through the CloudFront edge
- * (cdnBaseUrl — the 14s cache shields the 1-RCU DynamoDB table), while every
- * dynamic route (portfolio, trades, orders, transfers) hits the HTTP API
- * Gateway directly (apiBaseUrl) to fix CORS and enable zero-buffered LLM
- * streaming.
+ * Dual-endpoint routing: GET /api/v1/ticks/* plus the fixed-window ledger
+ * feeds GET /api/v1/trades/50 and GET /api/v1/transfers/50 go through the
+ * CloudFront edge (cdnBaseUrl — the 14s cache shields the 1-RCU DynamoDB table
+ * and the DSQL ledger), while every dynamic route (portfolio, orders, POST
+ * trades/transfers) hits the HTTP API Gateway directly (apiBaseUrl) to fix
+ * CORS and enable zero-buffered LLM streaming. The tick paths are
+ * mode-dependent: direct mode keeps the deployed /api/v1/ticks/* routes,
+ * proxy mode uses the Node server's non-versioned /api/ticks/* passthrough.
  *
  * CORS is already configured end-to-end: API Gateway allows `*` origins and
  * both Lambdas return `Access-Control-Allow-Origin: *`.
@@ -16,7 +19,8 @@
  * so an ambiguous timeout can be retried safely — the ledger dedupes replays.
  */
 
-import { apiBaseUrl, cdnBaseUrl } from "../config";
+import { apiBaseUrl, cdnBaseUrl, isDirectMode } from "../config";
+import type { PortfolioResponse, TransactionsResponse } from "../types";
 
 export type CloudHolding = {
   symbol: string;
@@ -64,9 +68,6 @@ export type CloudPortfolio = {
   investedValue: number;
   totalEquity: number;
   cashTransferred: number;
-  openOrders: CloudOrder[];
-  recentTrades: CloudTrade[];
-  recentTransfers: CloudTransfer[];
   generatedAt: number;
 };
 
@@ -133,16 +134,70 @@ export async function fetchPortfolio(
   return request<CloudPortfolio>(apiBaseUrl, "/api/v1/portfolio", { signal });
 }
 
+export type CloudTradesResponse = {
+  ok: boolean;
+  trades: CloudTrade[];
+};
+
+export type CloudTransfersResponse = {
+  ok: boolean;
+  transfers: CloudTransfer[];
+};
+
+// Direct mode only (proxy mode uses fetchTransactions against the Node server
+// instead). The fixed-window /50 feeds are served through the CloudFront edge
+// (cdnBaseUrl) with the 14s ledger cache — same routing as the ticks reads.
+export async function fetchTrades(
+  signal?: AbortSignal,
+): Promise<CloudTradesResponse> {
+  return request<CloudTradesResponse>(cdnBaseUrl, "/api/v1/trades/50", {
+    signal,
+  });
+}
+
+export async function fetchTransfers(
+  signal?: AbortSignal,
+): Promise<CloudTransfersResponse> {
+  return request<CloudTransfersResponse>(cdnBaseUrl, "/api/v1/transfers/50", {
+    signal,
+  });
+}
+
 export async function fetchTicks4h(
   signal?: AbortSignal,
 ): Promise<CloudTicks> {
-  return request<CloudTicks>(cdnBaseUrl, "/api/v1/ticks/4h", { signal });
+  return request<CloudTicks>(
+    cdnBaseUrl,
+    isDirectMode ? "/api/v1/ticks/4h" : "/api/ticks/4h",
+    { signal },
+  );
 }
 
 export async function fetchLatestTick(
   signal?: AbortSignal,
 ): Promise<CloudTicks> {
-  return request<CloudTicks>(cdnBaseUrl, "/api/v1/ticks/latest", { signal });
+  return request<CloudTicks>(
+    cdnBaseUrl,
+    isDirectMode ? "/api/v1/ticks/latest" : "/api/ticks/latest",
+    { signal },
+  );
+}
+
+// Proxy-mode endpoints served by the Node dev server: already-mapped account /
+// transaction summaries. Direct mode keeps using fetchPortfolio() + the
+// client-side portfolioToSummary mapper instead.
+export async function fetchPortfolioSummary(
+  signal?: AbortSignal,
+): Promise<PortfolioResponse> {
+  return request<PortfolioResponse>(apiBaseUrl, "/api/portfolio", { signal });
+}
+
+export async function fetchTransactions(
+  signal?: AbortSignal,
+): Promise<TransactionsResponse> {
+  return request<TransactionsResponse>(apiBaseUrl, "/api/transactions", {
+    signal,
+  });
 }
 
 export type CloudTradeResult = {

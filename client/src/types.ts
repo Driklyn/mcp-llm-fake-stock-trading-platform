@@ -1,5 +1,4 @@
 import type { Transaction } from "ui";
-import type { MarketParams } from "./utils/marketPrice";
 
 export type Account = {
   cashAvailable: number;
@@ -22,13 +21,12 @@ export type RawChartPoint = {
 
 export type ChartInputPoint = number | RawChartPoint;
 
-export type MarketSnapshot = {
-  price: number;
+export type PortfolioResponse = {
   account: Account;
-  history: ChartInputPoint[];
-  orders: unknown[];
-  transactions?: Transaction[];
-  marketParams?: MarketParams;
+};
+
+export type TransactionsResponse = {
+  transactions: Transaction[];
 };
 
 export type AssistantPayload = {
