@@ -9,6 +9,7 @@
  */
 
 import { getAssistantResponse, normalizeTradeQuantity } from "./llm.js";
+import { TOOL_NAMES, TOOLS } from "./tools.js";
 
 export function requiresConfirmationForTradeValue(quantity, price) {
   const qty = Number(quantity);
@@ -30,7 +31,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
     return Number(quote?.price ?? 0);
   }
 
-  async function buildChatResponse(plan, payload, fallbackText) {
+  async function buildChatResponse(plan, fallbackText = "") {
     const tool = plan?.tool;
     const pricePerShare = await currentPrice();
 
@@ -45,7 +46,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       };
     }
 
-    if (tool === "get_portfolio_summary") {
+    if (tool === TOOL_NAMES.getPortfolioSummary) {
       const summary = await account.getPortfolioSummary();
       return {
         plan,
@@ -54,7 +55,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       };
     }
 
-    if (tool === "get_quote") {
+    if (tool === TOOL_NAMES.getQuote) {
       const quote = await account.getQuote();
       return {
         plan,
@@ -67,7 +68,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       };
     }
 
-    if (tool === "buy_stock") {
+    if (tool === TOOL_NAMES.buyStock) {
       let quantity = normalizeTradeQuantity(plan.arguments?.quantity);
       const amount = Number(plan.arguments?.amount ?? 0);
       const confirmed = plan.arguments?.confirm === true;
@@ -129,7 +130,8 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       // confirmed or not requiring confirmation -> proceed
       try {
         const result = await account.buy(quantity);
-        const executedAmount = Number(result.quantity) * pricePerShare;
+        const executionPrice = Number(result?.price ?? pricePerShare ?? 0);
+        const executedAmount = Number(result.quantity) * executionPrice;
         const requestedAmount = Number(plan.arguments?.amount ?? 0);
         const remainder =
           requestedAmount > 0
@@ -137,12 +139,17 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
             : null;
         const execText =
           requestedAmount > 0
-            ? `Bought ${result.quantity} shares at $${pricePerShare.toFixed(2)} for $${executedAmount.toFixed(2)}${remainder > 0 ? `; $${remainder.toFixed(2)} could not buy another whole share and remains in cash.` : " (exact)."}`
-            : `Buy order completed for ${result.quantity} shares. Cash remaining: $${Number(result.cashAvailable ?? 0).toFixed(2)}.`;
+            ? `Bought ${result.quantity} shares at $${executionPrice.toFixed(2)} for $${executedAmount.toFixed(2)}${remainder > 0 ? `; $${remainder.toFixed(2)} could not buy another whole share and remains in cash.` : " (exact)."}`
+            : `Buy order completed for ${result.quantity} shares at $${executionPrice.toFixed(2)}. Cash remaining: $${Number(result.cashAvailable ?? 0).toFixed(2)}.`;
 
         return {
           plan,
-          payload: { ...result, executedAmount, pricePerShare, remainder },
+          payload: {
+            ...result,
+            executedAmount,
+            pricePerShare: executionPrice,
+            remainder,
+          },
           text: execText,
         };
       } catch (error) {
@@ -154,7 +161,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       }
     }
 
-    if (tool === "sell_stock") {
+    if (tool === TOOL_NAMES.sellStock) {
       let quantity = normalizeTradeQuantity(plan.arguments?.quantity);
       const amount = Number(plan.arguments?.amount ?? 0);
       const confirmed = plan.arguments?.confirm === true;
@@ -215,7 +222,8 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       // proceed
       try {
         const result = await account.sell(quantity);
-        const executedAmount = Number(result.quantity) * pricePerShare;
+        const executionPrice = Number(result?.price ?? pricePerShare ?? 0);
+        const executedAmount = Number(result.quantity) * executionPrice;
         const requestedAmount = Number(plan.arguments?.amount ?? 0);
         const remainder =
           requestedAmount > 0
@@ -223,12 +231,17 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
             : null;
         const execText =
           requestedAmount > 0
-            ? `Sold ${result.quantity} shares at $${pricePerShare.toFixed(2)} for $${executedAmount.toFixed(2)}${remainder > 0 ? `; $${remainder.toFixed(2)} could not be sold as whole shares.` : " (exact)."}`
-            : `Sell order completed for ${result.quantity} shares. Cash balance: $${Number(result.cashAvailable ?? 0).toFixed(2)}.`;
+            ? `Sold ${result.quantity} shares at $${executionPrice.toFixed(2)} for $${executedAmount.toFixed(2)}${remainder > 0 ? `; $${remainder.toFixed(2)} could not be sold as whole shares.` : " (exact)."}`
+            : `Sell order completed for ${result.quantity} shares at $${executionPrice.toFixed(2)}. Cash balance: $${Number(result.cashAvailable ?? 0).toFixed(2)}.`;
 
         return {
           plan,
-          payload: { ...result, executedAmount, pricePerShare, remainder },
+          payload: {
+            ...result,
+            executedAmount,
+            pricePerShare: executionPrice,
+            remainder,
+          },
           text: execText,
         };
       } catch (error) {
@@ -240,7 +253,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       }
     }
 
-    if (tool === "transfer_cash") {
+    if (tool === TOOL_NAMES.transferCash) {
       const amount = Number(plan.arguments?.amount ?? 0);
       try {
         const result = await account.transfer(amount);
@@ -258,12 +271,32 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       }
     }
 
-    if (tool === "place_order") {
-      const orderType = String(plan.arguments?.type ?? "limit").toLowerCase();
+    if (tool === TOOL_NAMES.placeOrder) {
+      let orderType = String(plan.arguments?.type ?? "limit").toLowerCase();
       const orderSide = String(plan.arguments?.side ?? "buy").toLowerCase();
       const quantity = normalizeTradeQuantity(plan.arguments?.quantity);
       const triggerPrice = Number(plan.arguments?.price ?? 0);
       const confirmed = plan.arguments?.confirm === true;
+
+      // Normalize type based on semantics: a buy trigger below current price
+      // is a limit order (buy when price <= trigger). A buy trigger above
+      // current price is a stop (buy when price >= trigger). Mirror logic
+      // for sells. This corrects LLM plans that accidentally choose the
+      // opposite type.
+      if (Number.isFinite(triggerPrice) && triggerPrice > 0) {
+        const current = Number(pricePerShare ?? 0);
+        let inferred = orderType; // default to provided
+        if (orderSide === "buy") {
+          // If trigger is less than or equal to current, force Limit to avoid instant market execution
+          inferred = triggerPrice <= current ? "limit" : "stop";
+        } else if (orderSide === "sell") {
+          // If trigger is greater than or equal to current, force Limit to lock in that exact price or better
+          inferred = triggerPrice >= current ? "limit" : "stop";
+        }
+        if (inferred !== orderType) {
+          orderType = inferred;
+        }
+      }
 
       if (!quantity) {
         return {
@@ -323,7 +356,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       }
     }
 
-    if (tool === "list_orders") {
+    if (tool === TOOL_NAMES.listOrders) {
       const filterType = String(plan.arguments?.type ?? "").toLowerCase();
       const filterSide = String(plan.arguments?.side ?? "").toLowerCase();
       const orders = (await account.listOrders()).orders.filter(
@@ -341,7 +374,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       };
     }
 
-    if (tool === "cancel_order") {
+    if (tool === TOOL_NAMES.cancelOrder) {
       try {
         const result = await account.cancelOrder(
           plan.arguments?.orderId ?? "pending",
@@ -365,7 +398,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
 
     return {
       plan,
-      payload: await account.getPortfolioSummary(),
+      payload: null,
       text:
         fallbackText ??
         "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.",
@@ -421,7 +454,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
           },
         };
 
-        const executed = await buildChatResponse(confirmationPlan, null, "");
+        const executed = await buildChatResponse(confirmationPlan);
         return { status: 200, body: { ...executed, text: executed.text } };
       }
 
@@ -447,7 +480,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       });
 
       const plan = response?.plan ?? {
-        tool: "get_portfolio_summary",
+        tool: TOOL_NAMES.getPortfolioSummary,
         arguments: {},
       };
       // If this was a natural-language confirmation and the assistant produced
@@ -466,7 +499,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
         response?.text ??
         "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.";
 
-      const executed = await buildChatResponse(plan, null, fallbackText);
+      const executed = await buildChatResponse(plan, fallbackText);
       return {
         status: 200,
         body: {
@@ -480,7 +513,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
       return {
         status: 500,
         body: {
-          plan: { tool: "get_portfolio_summary", arguments: {} },
+          plan: { tool: TOOL_NAMES.getPortfolioSummary, arguments: {} },
           text: "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",
         },
       };
@@ -489,3 +522,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
 
   return { handleRequest, buildChatResponse, currentPrice };
 }
+
+// Re-export the tool registry so package consumers (and src/index.js) can
+// access the definitions without importing tools.js directly.
+export { TOOLS, TOOL_NAMES };

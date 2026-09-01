@@ -174,7 +174,7 @@ test("init primes the cache from the cloud", async () => {
   }
 });
 
-test("buy returns the legacy engine result shape", async () => {
+test("buy returns the post-trade portfolio result shape", async () => {
   const service = createAccountService({ client: stubClient(), now: () => 0 });
   const result = await service.buy(5);
 
@@ -214,7 +214,7 @@ test("transfer returns the deposit/withdrawal shape", async () => {
   assert.equal(withdrawal.cashAvailable, 12000);
 });
 
-test("placeOrder maps the cloud order into the legacy order shape", async () => {
+test("placeOrder maps the cloud order into the client order shape", async () => {
   const service = createAccountService({ client: stubClient(), now: () => 0 });
   const order = await service.placeOrder({
     type: "limit",
@@ -247,19 +247,25 @@ test("cancelOrder and listOrders delegate to the cloud", async () => {
   assert.equal((await service.listOrders()).orders.length, 0);
 });
 
-test("getTransactions merges trades and transfers into one feed", async () => {
+test("getTransactions merges trades, transfers, and open orders into one feed", async () => {
   const client = stubClient();
   const service = createAccountService({ client, now: () => 0 });
 
   // No activity yet.
   assert.deepEqual(await service.getTransactions({ force: true }), []);
 
-  // Add a trade and a deposit to the stub portfolio.
+  // Add a trade, a deposit, and an open limit order to the stub portfolio.
   await client.postTrade({ side: "BUY", quantity: 5 });
   await client.postTransfer({ amount: 2500 });
+  await service.placeOrder({
+    type: "limit",
+    side: "buy",
+    quantity: 2,
+    price: 95,
+  });
 
   const transactions = await service.getTransactions({ force: true });
-  assert.equal(transactions.length, 2);
+  assert.equal(transactions.length, 3);
 
   const trade = transactions.find((entry) => entry.id === "trade-1");
   assert.equal(trade.kind, "buy");
@@ -273,4 +279,13 @@ test("getTransactions merges trades and transfers into one feed", async () => {
   assert.equal(transfer.kind, "deposit");
   assert.equal(transfer.amount, 2500);
   assert.equal(transfer.timestamp, 1787529630 * 1000);
+
+  const order = transactions.find((entry) => entry.id === "order-1");
+  assert.equal(order.kind, "limit");
+  assert.equal(order.side, "buy");
+  assert.equal(order.quantity, 2);
+  assert.equal(order.price, 95);
+  assert.equal(order.amount, 190);
+  assert.equal(order.status, "open");
+  assert.equal(order.timestamp, 1787529600 * 1000);
 });

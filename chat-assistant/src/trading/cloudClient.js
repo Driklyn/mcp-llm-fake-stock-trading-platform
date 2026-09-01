@@ -103,19 +103,19 @@ async function request(
 }
 
 // Dynamic routes (trading-api through the HTTP API Gateway directly).
-export const fetchPortfolio = () =>
+export const fetchPortfolio = async () =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
     "/api/v1/portfolio",
   );
 
-export const fetchOrders = (status) =>
+export const fetchOrders = async (status) =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
     `/api/v1/orders${status ? `?status=${encodeURIComponent(status)}` : ""}`,
   );
 
-export const postTrade = ({ symbol, side, quantity }) =>
+export const postTrade = async ({ symbol, side, quantity }) =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
     "/api/v1/trades",
@@ -126,7 +126,7 @@ export const postTrade = ({ symbol, side, quantity }) =>
     },
   );
 
-export const postTransfer = ({ amount }) =>
+export const postTransfer = async ({ amount }) =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
     "/api/v1/transfers",
@@ -137,7 +137,7 @@ export const postTransfer = ({ amount }) =>
     },
   );
 
-export const postOrder = ({ symbol, side, type, quantity, price }) =>
+export const postOrder = async ({ symbol, side, type, quantity, price }) =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
     "/api/v1/orders",
@@ -148,7 +148,7 @@ export const postOrder = ({ symbol, side, type, quantity, price }) =>
     },
   );
 
-export const cancelOrder = (orderId) =>
+export const cancelOrder = async (orderId) =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
     `/api/v1/orders/${encodeURIComponent(orderId)}/cancel`,
@@ -157,25 +157,25 @@ export const cancelOrder = (orderId) =>
 
 // Cached read feeds (CloudFront edge — the only HTTP path the ticks-fetcher
 // guard accepts, plus the 14s ticks/ledger edge cache).
-export const fetchTicks4h = () =>
+export const fetchTicks4h = async () =>
   request(
     baseUrlOrThrow(getTradingCdnBaseUrl(), "TRADING_CDN_BASE_URL"),
     "/api/v1/ticks/4h",
   );
 
-export const fetchLatestTick = () =>
+export const fetchLatestTick = async () =>
   request(
     baseUrlOrThrow(getTradingCdnBaseUrl(), "TRADING_CDN_BASE_URL"),
     "/api/v1/ticks/latest",
   );
 
-export const fetchTrades = () =>
+export const fetchTrades = async () =>
   request(
     baseUrlOrThrow(getTradingCdnBaseUrl(), "TRADING_CDN_BASE_URL"),
     "/api/v1/trades/50",
   );
 
-export const fetchTransfers = () =>
+export const fetchTransfers = async () =>
   request(
     baseUrlOrThrow(getTradingCdnBaseUrl(), "TRADING_CDN_BASE_URL"),
     "/api/v1/transfers/50",

@@ -2,9 +2,8 @@
  * The account service — a stateless proxy over trading-api, shared by the dev
  * server and the chat assistant Lambda.
  *
- * Reproduces the exact response shapes the UI / MCP / chat layers already
- * consume (previously produced by the deleted trading/engine.js), and keeps a
- * 15s in-memory quote + portfolio cache so the broadcast cadence stays cheap.
+ * Reproduces the response shapes the UI / MCP / chat layers consume and keeps
+ * a 15s in-memory quote + portfolio cache so the broadcast cadence stays cheap.
  * `getPortfolioSummary` returns `{ account }`: the full 9-field account object.
  * Transactions live on the dedicated `getTransactions()` feed. Quote/price data
  * lives in `getQuote` only — summaries never ship price, history, or orders.
@@ -60,7 +59,9 @@ function toTransaction(entry) {
     const price = Number(entry.price);
     return {
       id: `trade-${entry.id}`,
-      kind: side, // "buy" | "sell"
+      // Preserve originating order type ("limit"|"stop") when present;
+      // otherwise fall back to the execution side ("buy"|"sell").
+      kind: entry.type ? String(entry.type).toLowerCase() : side,
       side,
       quantity,
       price,
@@ -76,6 +77,25 @@ function toTransaction(entry) {
     amount: Math.abs(amount),
     status: "completed",
     timestamp: Number(entry.created_at) * 1000,
+  };
+}
+
+// Map a cloud order row into the Transaction shape the UI renders. Open
+// limit/stop orders surface in the history table as pending rows so the
+// "limit"/"stop" type chips and the "open" state chip have data to show.
+function orderToTransaction(order) {
+  const quantity = Number(order.quantity);
+  const price = Number(order.price);
+  return {
+    id: `order-${order.id}`,
+    orderId: String(order.id),
+    kind: String(order.type ?? "").toLowerCase(), // "limit" | "stop"
+    side: String(order.side ?? "").toLowerCase(), // "buy" | "sell"
+    quantity,
+    price,
+    amount: round2(quantity * price),
+    status: "open",
+    timestamp: Number(order.created_at ?? 0) * 1000,
   };
 }
 
@@ -163,15 +183,17 @@ export function createAccountService({
   }
 
   // Independent transaction feed backed by the dedicated trades/transfers
-  // endpoints (not the portfolio's embedded recent* lists), cached like the
-  // summary so the 15s broadcast cadence stays cheap.
+  // endpoints plus the open order book (orders are the "open" limit/stop rows
+  // in the history table), cached like the summary so the 15s broadcast
+  // cadence stays cheap.
   async function getTransactions({ force = false } = {}) {
     if (!force && transactionsCache && now() - transactionsAt < CACHE_TTL_MS) {
       return transactionsCache;
     }
-    const [tradesResult, transfersResult] = await Promise.all([
+    const [tradesResult, transfersResult, ordersResult] = await Promise.all([
       client.fetchTrades(),
       client.fetchTransfers(),
+      client.fetchOrders("open"),
     ]);
     const trades = Array.isArray(tradesResult?.trades)
       ? tradesResult.trades
@@ -179,9 +201,13 @@ export function createAccountService({
     const transfers = Array.isArray(transfersResult?.transfers)
       ? transfersResult.transfers
       : [];
+    const orders = Array.isArray(ordersResult?.orders)
+      ? ordersResult.orders
+      : [];
     transactionsCache = [
       ...trades.map(toTransaction),
       ...transfers.map(toTransaction),
+      ...orders.map(orderToTransaction),
     ]
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, 50);
@@ -190,8 +216,8 @@ export function createAccountService({
   }
 
   // Merge a mutation response with a freshly refreshed account summary so the
-  // returned object keeps the legacy engine result shape (traded quantity,
-  // post-trade position, and current account figures).
+  // returned object includes the latest traded quantity, post-trade position,
+  // and current account figures.
   async function finalize(result, extra = {}) {
     const portfolio = result?.portfolio ?? {};
     const traded = Number(result?.trade?.quantity ?? 0);

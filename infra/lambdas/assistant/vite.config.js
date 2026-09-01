@@ -37,7 +37,7 @@ export default defineConfig({
       external: (id) => nodeBuiltins.has(id) || id.startsWith("@aws-sdk/"),
       output: {
         // Single self-contained chunk (no dynamic-import code splitting).
-        inlineDynamicImports: true,
+        codeSplitting: false,
       },
     },
   },

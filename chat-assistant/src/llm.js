@@ -1,3 +1,5 @@
+import { TOOL_NAMES, TOOLS } from "./tools.js";
+
 function normalizeText(value) {
   return String(value ?? "")
     .toLowerCase()
@@ -61,16 +63,7 @@ export function normalizeTradeQuantity(rawQuantity) {
   return quantity;
 }
 
-const VALID_TOOLS = new Set([
-  "get_portfolio_summary",
-  "get_quote",
-  "buy_stock",
-  "sell_stock",
-  "transfer_cash",
-  "place_order",
-  "list_orders",
-  "cancel_order",
-]);
+const VALID_TOOLS = new Set(TOOLS.map((tool) => tool.function.name));
 
 export function requiresConfirmationForTrade(quantity, pricePerShare) {
   const qty = Number(quantity);
@@ -195,14 +188,14 @@ export function buildTradePlan(prompt, options = {}) {
   if (
     /(portfolio|account|balance|equity|cash|holdings|invested|worth)/.test(text)
   ) {
-    return { tool: "get_portfolio_summary", arguments: {} };
+    return { tool: TOOL_NAMES.getPortfolioSummary, arguments: {} };
   }
 
   if (
     /(quote|price|market|ticker|current.*fake)/.test(text) &&
     !hasTradeIntent
   ) {
-    return { tool: "get_quote", arguments: {} };
+    return { tool: TOOL_NAMES.getQuote, arguments: {} };
   }
 
   const wantsOrderList =
@@ -220,7 +213,7 @@ export function buildTradePlan(prompt, options = {}) {
     else if (hasLimit) argumentsValue.type = "limit";
     if (hasSellIntent && !hasBuyIntent) argumentsValue.side = "sell";
     else if (hasBuyIntent && !hasSellIntent) argumentsValue.side = "buy";
-    return { tool: "list_orders", arguments: argumentsValue };
+    return { tool: TOOL_NAMES.listOrders, arguments: argumentsValue };
   }
 
   if (
@@ -268,21 +261,21 @@ export function buildTradePlan(prompt, options = {}) {
     }
 
     return {
-      tool: "place_order",
+      tool: TOOL_NAMES.placeOrder,
       arguments: argumentsValue,
     };
   }
 
   if (/(deposit|add cash|fund|transfer.*in|put in|top up)/.test(text)) {
     return {
-      tool: "transfer_cash",
+      tool: TOOL_NAMES.transferCash,
       arguments: { amount: Math.max(0, extractAmount(prompt, 0)) },
     };
   }
 
   if (/(withdraw|remove cash|cash out|transfer.*out|take out)/.test(text)) {
     return {
-      tool: "transfer_cash",
+      tool: TOOL_NAMES.transferCash,
       arguments: {
         amount: -Math.max(0, extractAmount(prompt, 0)),
       },
@@ -315,7 +308,7 @@ export function buildTradePlan(prompt, options = {}) {
     }
 
     return {
-      tool: "sell_stock",
+      tool: TOOL_NAMES.sellStock,
       arguments: argumentsValue,
     };
   }
@@ -346,22 +339,22 @@ export function buildTradePlan(prompt, options = {}) {
     }
 
     return {
-      tool: "buy_stock",
+      tool: TOOL_NAMES.buyStock,
       arguments: argumentsValue,
     };
   }
 
   if (/(cancel|remove).*order|order.*(cancel|remove)/.test(text)) {
-    return { tool: "cancel_order", arguments: { orderId: "pending" } };
+    return { tool: TOOL_NAMES.cancelOrder, arguments: { orderId: "pending" } };
   }
 
   if (/(orders?|pending)/.test(text)) {
-    return { tool: "list_orders", arguments: {} };
+    return { tool: TOOL_NAMES.listOrders, arguments: {} };
   }
 
   if (!allowNetwork) {
     return {
-      tool: "get_portfolio_summary",
+      tool: TOOL_NAMES.getPortfolioSummary,
       arguments: {},
       fallback:
         "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",
@@ -369,7 +362,7 @@ export function buildTradePlan(prompt, options = {}) {
   }
 
   return {
-    tool: "get_portfolio_summary",
+    tool: TOOL_NAMES.getPortfolioSummary,
     arguments: {},
     fallback:
       "I can help with portfolio checks, price quotes, buys, sells, limit and stop orders, deposits, withdrawals, and order cancellations.",
@@ -385,7 +378,6 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     apiKey,
     pricePerShare = 100,
   } = dependencies;
-
   const plan = buildTradePlan(prompt, {
     allowNetwork: true,
     pricePerShare,
@@ -402,8 +394,6 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
   }
 
   try {
-    const toolList = [...VALID_TOOLS].join(", ");
-
     const response = await fetchFn(`${baseUrl.replace(/\/$/, "")}${chatPath}`, {
       method: "POST",
       headers: {
@@ -416,15 +406,14 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
         messages: [
           {
             role: "system",
-            content: `You are a trading assistant for a fake stock app. Return valid JSON only. If the user request is not clearly about portfolio, price, buying, selling, limit or stop orders, transfers, or order cancellation, return {"tool":"none","arguments":{}}. Otherwise choose exactly one tool from this list: ${toolList}. When the user asks to check, list, show, view, or see their orders (for example 'check limit orders' or 'my pending orders'), use list_orders and never place_order. For place_order, arguments must include type ('limit' or 'stop'), side ('buy' or 'sell'), quantity, and price. Return {"tool":"TOOL_NAME","arguments":{...}}. Keep values numeric when required. Be concise and precise.`,
+            content: `You are a trading assistant for a fake stock app. Return valid JSON only. If the user request is not clearly about portfolio, price, buying, selling, limit or stop orders, transfers, or order cancellation, return {"tool":"none","arguments":{}}. When the user asks to check, list, show, view, or see their orders (for example 'check limit orders' or 'my pending orders'), use list_orders and never place_order. For place_order, arguments must include type ('limit' or 'stop'), side ('buy' or 'sell'), quantity, and price. Return {"tool":"TOOL_NAME","arguments":{...}}. Keep values numeric when required. Be concise and precise.`,
           },
           { role: "user", content: prompt },
         ],
+        tools: TOOLS,
         // Ollama nests sampling options under `options`; OpenAI-compatible
         // endpoints (e.g. OpenRouter) take `temperature` at the top level.
-        ...(apiKey
-          ? { temperature: 0.1 }
-          : { options: { temperature: 0.1 } }),
+        ...(apiKey ? { temperature: 0.1 } : { options: { temperature: 0.1 } }),
       }),
     });
 
@@ -436,8 +425,36 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     const rawContent =
       data.message?.content ?? data.choices?.[0]?.message?.content ?? "";
 
+    // Native function-calling responses (Ollama: data.message.tool_calls,
+    // OpenAI-compatible: data.choices[0].message.tool_calls) are normalized
+    // into the same {"tool":"...","arguments":{...}} candidate the inline-JSON
+    // path produces, then routed through parseToolPlan unchanged. The inline
+    // `message.content` JSON stays as the fallback when no tool call was made.
+    const toolCall =
+      data.message?.tool_calls?.[0] ??
+      data.choices?.[0]?.message?.tool_calls?.[0];
+
+    let toolCallContent = "";
+    if (toolCall?.function) {
+      const name =
+        typeof toolCall.function.name === "string"
+          ? toolCall.function.name.trim()
+          : "";
+      let args = toolCall.function.arguments;
+      if (typeof args === "string") {
+        try {
+          args = JSON.parse(args);
+        } catch {
+          args = {};
+        }
+      }
+      if (name && args && typeof args === "object") {
+        toolCallContent = JSON.stringify({ tool: name, arguments: args });
+      }
+    }
+
     const parsedPlan = parseToolPlan(
-      String(rawContent),
+      toolCallContent || String(rawContent),
       prompt,
       dependencies.pendingTool,
     );
@@ -446,9 +463,7 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     const textHasBuyIntent = /(buy|purchase|acquire|own|grab)/.test(
       normalizedText,
     );
-    const textHasSellIntent = /(sell|liquidate|exit|dump)/.test(
-      normalizedText,
-    );
+    const textHasSellIntent = /(sell|liquidate|exit|dump)/.test(normalizedText);
     const textHasTriggerWord =
       /(above|over|higher than|below|under|lower than|rises?\s+to|drops?\s+to|falls?\s+to|climbs?\s+to)/.test(
         normalizedText,
@@ -456,9 +471,9 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
 
     const parsedTool = parsedPlan?.tool;
     const parsedSide =
-      parsedTool === "buy_stock"
+      parsedTool === TOOL_NAMES.buyStock
         ? "buy"
-        : parsedTool === "sell_stock"
+        : parsedTool === TOOL_NAMES.sellStock
           ? "sell"
           : typeof parsedPlan?.arguments?.side === "string"
             ? parsedPlan.arguments.side.toLowerCase()
@@ -477,14 +492,16 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     const llmTurnsConditionalIntoMarket =
       textHasTriggerWord &&
       (textHasBuyIntent || textHasSellIntent) &&
-      plan.tool === "place_order" &&
-      (parsedTool === "buy_stock" || parsedTool === "sell_stock");
+      plan.tool === TOOL_NAMES.placeOrder &&
+      (parsedTool === TOOL_NAMES.buyStock ||
+        parsedTool === TOOL_NAMES.sellStock);
 
     const llmTurnsMarketIntoConditional =
       !textHasTriggerWord &&
       (textHasBuyIntent || textHasSellIntent) &&
-      (plan.tool === "buy_stock" || plan.tool === "sell_stock") &&
-      parsedTool === "place_order";
+      (plan.tool === TOOL_NAMES.buyStock ||
+        plan.tool === TOOL_NAMES.sellStock) &&
+      parsedTool === TOOL_NAMES.placeOrder;
 
     // Listing open orders is read-only, a buy must never become a sell (or
     // vice versa), an explicitly conditional order must never degrade into
@@ -495,7 +512,7 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     // plan recognized a clear trading intent (for example "buy share" should
     // buy 1 share), the deterministic plan wins instead of the generic help.
     const finalPlan =
-      plan.tool === "list_orders" ||
+      plan.tool === TOOL_NAMES.listOrders ||
       llmFlipsSide ||
       llmTurnsConditionalIntoMarket ||
       llmTurnsMarketIntoConditional ||
@@ -506,7 +523,7 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
       finalPlan.tool === null
         ? (finalPlan.fallback ??
           "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, placing limit or stop orders, depositing or withdrawing cash, and listing or canceling orders.")
-        : finalPlan.tool === "list_orders"
+        : finalPlan.tool === TOOL_NAMES.listOrders
           ? "Here are your current open orders."
           : typeof rawContent === "string" && rawContent.trim()
             ? rawContent.trim()
@@ -529,8 +546,3 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     };
   }
 }
-
-
-
-
-

@@ -144,6 +144,11 @@ export type CloudTransfersResponse = {
   transfers: CloudTransfer[];
 };
 
+export type CloudOrdersResponse = {
+  ok: boolean;
+  orders: CloudOrder[];
+};
+
 // Direct mode only (proxy mode uses fetchTransactions against the Node server
 // instead). The fixed-window /50 feeds are served through the CloudFront edge
 // (cdnBaseUrl) with the 14s ledger cache — same routing as the ticks reads.
@@ -161,6 +166,18 @@ export async function fetchTransfers(
   return request<CloudTransfersResponse>(cdnBaseUrl, "/api/v1/transfers/50", {
     signal,
   });
+}
+
+export async function fetchOrders(
+  signal?: AbortSignal,
+): Promise<CloudOrdersResponse> {
+  // The orders list is a dynamic route on the API Gateway base (like the rest
+  // of the orders API) — only the /50 ledger feeds are CloudFront-cached.
+  return request<CloudOrdersResponse>(
+    apiBaseUrl,
+    "/api/v1/orders?status=open",
+    { signal },
+  );
 }
 
 export async function fetchTicks4h(

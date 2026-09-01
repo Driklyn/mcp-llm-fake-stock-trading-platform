@@ -106,7 +106,7 @@ export default function ChatPanel({
           type="text"
           value={input}
           onChange={(event) => onInputChange(event.target.value)}
-          placeholder="Ask me to check your portfolio, buy shares, place limit/stop orders, transfer cash..."
+          placeholder="How can I help?"
           disabled={isWorking || hasPendingConfirmation}
         />
         <Button type="submit" disabled={isWorking || hasPendingConfirmation}>

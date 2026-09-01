@@ -106,6 +106,7 @@ const SCHEMA_SQL = `
     idempotency_key TEXT
   );
   ALTER TABLE trades ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+  ALTER TABLE trades ADD COLUMN IF NOT EXISTS type TEXT;
 `;
 
 export class ApiError extends Error {
@@ -376,7 +377,7 @@ async function executeTrade(pool, region, body) {
   // Idempotent replay: same key -> return the stored execution.
   if (idempotencyKey) {
     const existing = await pool.query(
-      "SELECT id, symbol, side, quantity, price, created_at FROM trades WHERE idempotency_key = $1",
+      "SELECT id, symbol, side, type, quantity, price, created_at FROM trades WHERE idempotency_key = $1",
       [idempotencyKey],
     );
     if (existing.rows[0]) {
@@ -411,10 +412,18 @@ async function executeTrade(pool, region, body) {
       nowSeconds,
     });
     const tradeResult = await client.query(
-      `INSERT INTO trades (symbol, side, quantity, price, created_at, idempotency_key)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, symbol, side, quantity, price, created_at`,
-      [symbol, side, quantity, fillPrice, nowSeconds, idempotencyKey || null],
+      `INSERT INTO trades (symbol, side, type, quantity, price, created_at, idempotency_key)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, symbol, side, type, quantity, price, created_at`,
+      [
+        symbol,
+        side,
+        null,
+        quantity,
+        fillPrice,
+        nowSeconds,
+        idempotencyKey || null,
+      ],
     );
     await client.query("COMMIT");
 
@@ -456,6 +465,7 @@ export function resolveFeedWindow(event) {
 async function getTrades(pool, limit) {
   const { rows } = await pool.query(
     `SELECT id, symbol, side, quantity, price, created_at
+     , type
      FROM trades ORDER BY id DESC LIMIT $1`,
     [limit],
   );
@@ -706,11 +716,12 @@ async function processOrders(
           nowSeconds,
         });
         await client.query(
-          `INSERT INTO trades (symbol, side, quantity, price, created_at)
-           VALUES ($1, $2, $3, $4, $5)`,
+          `INSERT INTO trades (symbol, side, type, quantity, price, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
           [
             order.symbol,
             order.side,
+            order.type,
             order.quantity,
             order.fillPrice,
             nowSeconds,

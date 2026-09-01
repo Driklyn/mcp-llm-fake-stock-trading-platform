@@ -103,6 +103,29 @@ test("a small market buy executes and returns a chat response", async () => {
   assert.match(body.text, /Buy order completed for 3 shares/);
 });
 
+test("post-trade messaging uses the exact execution fill price from the result", async () => {
+  const assistant = makeAssistant({
+    account: stubAccount({
+      getQuote: async () => ({ symbol: "FAKE", price: 100, history: [] }),
+      buy: async (quantity) => ({
+        kind: "buy",
+        quantity,
+        price: 99,
+        holdings: quantity,
+        cashAvailable: 10000 - 99 * quantity,
+      }),
+    }),
+  });
+
+  const { status, body } = await assistant.handleRequest({
+    message: "buy 3 shares",
+  });
+
+  assert.equal(status, 200);
+  assert.match(body.text, /at \$99\.00/);
+  assert.equal(body.payload.pricePerShare, 99);
+});
+
 test("trades worth $1000+ require a pending confirmation", async () => {
   const account = stubAccount();
   const assistant = makeAssistant({ account });

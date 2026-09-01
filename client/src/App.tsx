@@ -34,6 +34,7 @@ import {
 import { assistantUrl, isDirectMode, wsUrl } from "./config";
 import {
   fetchLatestTick,
+  fetchOrders,
   fetchPortfolio,
   fetchPortfolioSummary,
   fetchTicks4h,
@@ -43,6 +44,7 @@ import {
   placeOrder as cloudPlaceOrder,
   postTrade,
   postTransfer,
+  type CloudOrder,
   type CloudPortfolio,
   type CloudTicks,
   type CloudTrade,
@@ -160,8 +162,9 @@ function App() {
     portfolio: CloudPortfolio,
     trades: CloudTrade[],
     transfers: CloudTransfer[],
+    orders: CloudOrder[],
   ) => {
-    const summary = portfolioToSummary(portfolio, trades, transfers);
+    const summary = portfolioToSummary(portfolio, trades, transfers, orders);
     setAccount(summary.account);
     setTransactions(summary.transactions);
     setRefreshSeconds(15);
@@ -172,7 +175,7 @@ function App() {
   // falls back to [] so the account still renders (mirrors proxy mode's
   // Promise.allSettled philosophy).
   const fetchDirectAccount = async (signal?: AbortSignal) => {
-    const [portfolio, trades, transfers] = await Promise.all([
+    const [portfolio, trades, transfers, orders] = await Promise.all([
       fetchPortfolio(signal),
       fetchTrades(signal).catch(() => ({
         ok: true,
@@ -182,8 +185,17 @@ function App() {
         ok: true,
         transfers: [] as CloudTransfer[],
       })),
+      fetchOrders(signal).catch(() => ({
+        ok: true,
+        orders: [] as CloudOrder[],
+      })),
     ]);
-    return { portfolio, trades: trades.trades, transfers: transfers.transfers };
+    return {
+      portfolio,
+      trades: trades.trades,
+      transfers: transfers.transfers,
+      orders: orders.orders,
+    };
   };
 
   useEffect(() => {
@@ -197,7 +209,7 @@ function App() {
       // WebSocket through the CloudFront HTTP distribution.
       const refreshDirect = async () => {
         try {
-          const { portfolio, trades, transfers } =
+          const { portfolio, trades, transfers, orders } =
             await fetchDirectAccount(signal);
           let incoming: CloudTicks;
           try {
@@ -206,7 +218,7 @@ function App() {
             incoming = localFallbackLatest(Math.floor(Date.now() / 1000));
           }
           if (!cancelled) {
-            renderAccount(portfolio, trades, transfers);
+            renderAccount(portfolio, trades, transfers, orders);
             renderMarket(mergeCloudTicks(ticksRef.current, incoming));
           }
         } catch (error) {
@@ -216,7 +228,7 @@ function App() {
 
       const loadInitial = async () => {
         try {
-          const { portfolio, trades, transfers } =
+          const { portfolio, trades, transfers, orders } =
             await fetchDirectAccount(signal);
           let incoming: CloudTicks;
           try {
@@ -225,7 +237,7 @@ function App() {
             incoming = localFallback4h(Math.floor(Date.now() / 1000));
           }
           if (!cancelled) {
-            renderAccount(portfolio, trades, transfers);
+            renderAccount(portfolio, trades, transfers, orders);
             renderMarket(mergeCloudTicks(ticksRef.current, incoming));
           }
         } catch (error) {
@@ -513,14 +525,15 @@ function App() {
   const refreshDirect = async () => {
     if (!isDirectMode) return;
     try {
-      const { portfolio, trades, transfers } = await fetchDirectAccount();
+      const { portfolio, trades, transfers, orders } =
+        await fetchDirectAccount();
       let incoming: CloudTicks;
       try {
         incoming = await fetchLatestTick();
       } catch {
         incoming = localFallbackLatest(Math.floor(Date.now() / 1000));
       }
-      renderAccount(portfolio, trades, transfers);
+      renderAccount(portfolio, trades, transfers, orders);
       renderMarket(mergeCloudTicks(ticksRef.current, incoming));
     } catch {
       // Keep the last known state; the caller already surfaced the result.

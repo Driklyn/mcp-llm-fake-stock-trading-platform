@@ -118,12 +118,34 @@ function toggleValue<T>(value: T, set: Set<T>): Set<T> {
   return next;
 }
 
+// A "buy"/"sell" chip also matches entries whose `side` matches, so open
+// limit/stop orders (kind "limit"/"stop" but side "buy"/"sell") show up.
+function matchesType(
+  entry: Transaction,
+  types: Set<Transaction["kind"]>,
+): boolean {
+  return [...types].some(
+    (type) => entry.kind === type || entry.side === type,
+  );
+}
+
 function parsePriceInput(value: string): number | null {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) {
     return null;
   }
   return n;
+}
+
+// Keep only digits and a single decimal point, max 2 decimal places.
+function sanitizePriceInput(value: string): string {
+  const cleaned = value.replace(/[^\d.]/g, "");
+  const [whole, ...rest] = cleaned.split(".");
+  if (rest.length === 0) {
+    return whole;
+  }
+  const decimals = rest.join("").slice(0, 2);
+  return decimals ? `${whole}.${decimals}` : `${whole}.`;
 }
 
 export default function TransactionsHistory({
@@ -147,7 +169,7 @@ export default function TransactionsHistory({
     const max = parsePriceInput(maxPrice);
 
     const filtered = transactions.filter((entry) => {
-      if (activeTypes.size > 0 && !activeTypes.has(entry.kind)) {
+      if (activeTypes.size > 0 && !matchesType(entry, activeTypes)) {
         return false;
       }
       if (activeStatuses.size > 0 && !activeStatuses.has(entry.status)) {
@@ -236,6 +258,20 @@ export default function TransactionsHistory({
     }
   };
 
+  const handlePriceChange =
+    (setter: React.Dispatch<React.SetStateAction<string>>) =>
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const raw = event.target.value;
+      const cleaned = sanitizePriceInput(raw);
+      if (cleaned !== raw) {
+        // Force the DOM back in sync when we truncated an extra decimal;
+        // React bails out when the new state equals the old state, which
+        // would otherwise leave the extra digit visible.
+        event.target.value = cleaned;
+      }
+      setter(cleaned);
+    };
+
   const sortIndicator = (key: SortKey) => {
     if (sortKey !== key) {
       return <span className={styles.muted}>↕</span>;
@@ -298,7 +334,7 @@ export default function TransactionsHistory({
             step="0.01"
             placeholder="Min"
             value={minPrice}
-            onChange={(event) => setMinPrice(event.target.value)}
+            onChange={handlePriceChange(setMinPrice)}
             className={styles.priceInput}
           />
           <span className={styles.muted}>—</span>
@@ -308,7 +344,7 @@ export default function TransactionsHistory({
             step="0.01"
             placeholder="Max"
             value={maxPrice}
-            onChange={(event) => setMaxPrice(event.target.value)}
+            onChange={handlePriceChange(setMaxPrice)}
             className={styles.priceInput}
           />
         </div>

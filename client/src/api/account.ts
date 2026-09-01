@@ -9,6 +9,7 @@
 import type { Transaction } from "ui";
 import type { Account, ChartInputPoint } from "../types";
 import type {
+  CloudOrder,
   CloudPortfolio,
   CloudTicks,
   CloudTrade,
@@ -85,15 +86,33 @@ function toTransaction(entry: CloudTrade | CloudTransfer): Transaction {
   };
 }
 
+function orderToTransaction(order: CloudOrder): Transaction {
+  const quantity = Number(order.quantity);
+  const price = Number(order.price);
+  return {
+    id: `order-${order.id}`,
+    orderId: String(order.id),
+    kind: String(order.type ?? "").toLowerCase() as "limit" | "stop",
+    side: String(order.side ?? "").toLowerCase() as "buy" | "sell",
+    quantity,
+    price,
+    amount: round2(quantity * price),
+    status: "open",
+    timestamp: Number(order.created_at ?? 0) * 1000,
+  };
+}
+
 /**
- * Map a CloudPortfolio + the dedicated trades/transfers feeds into the account
- * summary + transaction list the UI renders (holdings/cash/transaction math
- * only — no price, history, or orders).
+ * Map a CloudPortfolio + the dedicated trades/transfers feeds plus the open
+ * order book into the account summary + transaction list the UI renders
+ * (holdings/cash/transaction math only — no price, history, or orders). Open
+ * orders become the "open" limit/stop rows in the history table.
  */
 export function portfolioToSummary(
   portfolio: CloudPortfolio,
   trades: CloudTrade[],
   transfers: CloudTransfer[],
+  orders: CloudOrder[],
 ): {
   account: Account;
   transactions: Transaction[];
@@ -131,6 +150,7 @@ export function portfolioToSummary(
   const transactions = [
     ...trades.map((trade) => toTransaction(trade)),
     ...transfers.map((transfer) => toTransaction(transfer)),
+    ...orders.map((order) => orderToTransaction(order)),
   ]
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 50);
