@@ -326,6 +326,10 @@ resource "aws_lambda_function" "ticks_generator" {
   filename         = data.archive_file.ticks_generator_lambda.output_path
   source_code_hash = data.archive_file.ticks_generator_lambda.output_base64sha256
 
+  # Lock to 1 to guarantee single-threaded chronological execution and 
+  # prevent duplicate writes/race conditions if EventBridge double-fires.
+  reserved_concurrent_executions = 1
+
   environment {
     variables = {
       MARKET_TABLE       = var.dynamodb_table_name
@@ -354,14 +358,15 @@ data "archive_file" "ticks_fetcher_lambda" {
 }
 
 resource "aws_lambda_function" "ticks_fetcher" {
-  function_name    = var.ticks_fetcher_function_name
-  role             = aws_iam_role.ticks_fetcher_lambda.arn
-  handler          = "index.handler"
-  runtime          = "nodejs22.x"
-  memory_size      = var.lambda_memory_size
-  timeout          = var.lambda_timeout
-  filename         = data.archive_file.ticks_fetcher_lambda.output_path
-  source_code_hash = data.archive_file.ticks_fetcher_lambda.output_base64sha256
+  function_name                  = var.ticks_fetcher_function_name
+  role                           = aws_iam_role.ticks_fetcher_lambda.arn
+  handler                        = "index.handler"
+  runtime                        = "nodejs22.x"
+  memory_size                    = var.lambda_memory_size
+  timeout                        = var.lambda_timeout
+  filename                       = data.archive_file.ticks_fetcher_lambda.output_path
+  source_code_hash               = data.archive_file.ticks_fetcher_lambda.output_base64sha256
+  reserved_concurrent_executions = var.lambda_max_concurrency
 
   environment {
     variables = {
@@ -387,14 +392,15 @@ data "archive_file" "trading_api_lambda" {
 }
 
 resource "aws_lambda_function" "trading_api" {
-  function_name    = var.trading_api_function_name
-  role             = aws_iam_role.trading_api_lambda.arn
-  handler          = "index.handler"
-  runtime          = "nodejs22.x"
-  memory_size      = var.lambda_memory_size
-  timeout          = var.lambda_timeout
-  filename         = data.archive_file.trading_api_lambda.output_path
-  source_code_hash = data.archive_file.trading_api_lambda.output_base64sha256
+  function_name                  = var.trading_api_function_name
+  role                           = aws_iam_role.trading_api_lambda.arn
+  handler                        = "index.handler"
+  runtime                        = "nodejs22.x"
+  memory_size                    = var.lambda_memory_size
+  timeout                        = var.lambda_timeout
+  filename                       = data.archive_file.trading_api_lambda.output_path
+  source_code_hash               = data.archive_file.trading_api_lambda.output_base64sha256
+  reserved_concurrent_executions = var.lambda_max_concurrency
 
   environment {
     variables = {
@@ -450,6 +456,10 @@ resource "aws_lambda_function" "hourly_sync_engine" {
   filename         = data.archive_file.hourly_sync_lambda.output_path
   source_code_hash = data.archive_file.hourly_sync_lambda.output_base64sha256
 
+  # Lock to 1 because this is an unscaled background sync engine. Parallel runs 
+  # would waste DPU-seconds and create relational ledger write-lock contention.
+  reserved_concurrent_executions = 1
+
   environment {
     variables = {
       DSQL_ENDPOINT    = local.dsql_endpoint
@@ -477,14 +487,15 @@ data "archive_file" "assistant_lambda" {
 }
 
 resource "aws_lambda_function" "assistant" {
-  function_name    = var.assistant_function_name
-  role             = aws_iam_role.assistant_lambda.arn
-  handler          = "index.handler"
-  runtime          = "nodejs22.x"
-  memory_size      = var.lambda_memory_size
-  timeout          = var.lambda_timeout
-  filename         = data.archive_file.assistant_lambda.output_path
-  source_code_hash = data.archive_file.assistant_lambda.output_base64sha256
+  function_name                  = var.assistant_function_name
+  role                           = aws_iam_role.assistant_lambda.arn
+  handler                        = "index.handler"
+  runtime                        = "nodejs22.x"
+  memory_size                    = var.lambda_memory_size
+  timeout                        = var.lambda_timeout
+  filename                       = data.archive_file.assistant_lambda.output_path
+  source_code_hash               = data.archive_file.assistant_lambda.output_base64sha256
+  reserved_concurrent_executions = var.lambda_max_concurrency
 
   environment {
     variables = {
@@ -575,14 +586,14 @@ resource "aws_apigatewayv2_stage" "market_api_default" {
   name        = "$default"
   auto_deploy = true
 
-  # Hard limits protect against budget overruns from public traffic
   default_route_settings {
-    throttling_burst_limit = 10
-    throttling_rate_limit  = 5
+    throttling_burst_limit = var.api_gateway_throttle_burst_limit
+    throttling_rate_limit  = var.api_gateway_throttle_rate_limit
   }
 
   tags = var.tags
 }
+
 
 # --- Integrations (AWS_PROXY → Lambda, payload format 2.0) --------------------
 resource "aws_apigatewayv2_integration" "ticks_generator" {
@@ -912,4 +923,78 @@ resource "aws_cloudfront_distribution" "market_edge" {
   }
 
   tags = var.tags
+}
+
+# ---------------------------------------------------------------------------
+# Zero-Dollar Cost Protection — Tag Scoped Multi-Tier Budgets
+# ---------------------------------------------------------------------------
+
+resource "aws_budgets_budget" "zero_dollar_budget" {
+  name         = "market-infra-free-tier-budget"
+  budget_type  = "COST"
+  limit_amount = var.budget_limit_usd
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+  metrics      = ["BlendedCost"]
+
+  filter_expression {
+    dimensions {
+      key = "SERVICE"
+      values = [
+        "Amazon API Gateway",
+        "AWS Lambda",
+        "Amazon CloudFront",
+        "Amazon DynamoDB",
+        "Amazon Aurora DSQL"
+      ]
+    }
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 1
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_notify_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 10
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_notify_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 25
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_notify_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 50
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_notify_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "ACTUAL"
+    subscriber_email_addresses = [var.budget_notify_email]
+  }
+
+  notification {
+    comparison_operator        = "GREATER_THAN"
+    threshold                  = 100
+    threshold_type             = "PERCENTAGE"
+    notification_type          = "FORECASTED"
+    subscriber_email_addresses = [var.budget_notify_email]
+  }
 }

@@ -39,7 +39,12 @@ output "trades_endpoint" {
 }
 
 output "trading_api_base_url" {
-  description = "Base URL (CloudFront edge) the local server should use as TRADING_API_URL."
+  description = "Base URL of the HTTP API Gateway — set TRADING_API_BASE_URL to this for dynamic trading routes."
+  value       = aws_apigatewayv2_api.market_api.api_endpoint
+}
+
+output "trading_cdn_base_url" {
+  description = "Base URL (CloudFront edge) for the cached ticks/ledger read feeds — set TRADING_CDN_BASE_URL to this."
   value       = "https://${aws_cloudfront_distribution.market_edge.domain_name}"
 }
 

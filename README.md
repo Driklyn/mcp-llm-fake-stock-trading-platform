@@ -5,6 +5,11 @@ it through a WebSocket live feed, an MCP tool layer, and an optional LLM-powered
 assistant. A Vite + React client renders the portfolio, an interactive canvas price
 chart, and a chat panel that can buy, sell, and manage orders in plain English.
 
+**NOTE:** This project was created by Kevin Jurkowski as a portfolio piece. It was created
+entirely using AI tooling (primarily Cline + DeepSeek, along with Google Gemini and the free
+tier of Copilot). At the time of this writing, it took ~50 hours and ~$5.00 to create. [The
+infrastructure](infra/README.md) was designed in such a way that it costs $0/month to run on AWS.
+
 ## Highlights
 
 - Simulated `FAKE` ticker with a bounded random-walk price that ticks every 15 seconds
@@ -40,11 +45,13 @@ stack (`infra/`) — the local server is a **stateless proxy** over
 `infra/lambdas/trading-api`. There is no local account state anymore.
 
 1. Install dependencies: `npm install`
-2. Deploy the infra stack and read the base URL from the Terraform output
-   `trading_api_base_url` (see `infra/README.md`).
+2. Deploy the infra stack and read the two base URLs from the Terraform
+   outputs `trading_api_base_url` (API Gateway) and `trading_cdn_base_url`
+   (CloudFront) (see `infra/README.md`).
 3. Start the backend, pointing it at the deployed API:
 
-   TRADING_API_URL=https://<cloudfront-domain> npm run dev:server
+   TRADING_API_BASE_URL=https://<api-gateway-domain> \
+   TRADING_CDN_BASE_URL=https://<cloudfront-domain> npm run dev:server
 
 4. Start the front-end: `npm run dev`
 5. Open http://localhost:5173
@@ -176,8 +183,9 @@ What changes in direct mode:
   Lambda. The deterministic parser always works; the OpenRouter LLM is optional
   via the `assistant_llm_*` Terraform variables.
 
-Keep developing LLM/MCP features locally as before: set `TRADING_API_URL`, run
-`npm run dev:server`, then `npm run dev` (leave both `VITE_API_BASE_URL` and `VITE_CDN_BASE_URL` unset).
+Keep developing LLM/MCP features locally as before: set `TRADING_API_BASE_URL` (API
+Gateway) and `TRADING_CDN_BASE_URL` (CloudFront), run `npm run dev:server`, then
+`npm run dev` (leave both `VITE_API_BASE_URL` and `VITE_CDN_BASE_URL` unset).
 
 ### AWS (free-tier-friendly)
 
@@ -185,7 +193,8 @@ Keep developing LLM/MCP features locally as before: set `TRADING_API_URL`, run
   serverless `infra/` stack (see `infra/README.md`): Aurora DSQL + DynamoDB
   (price history + pending confirmations) + API Gateway + CloudFront + 5
   Lambdas + EventBridge schedules + DynamoDB Streams, all inside the free tier.
-- Run the Node proxy server anywhere that can reach the CloudFront URL
-  (`TRADING_API_URL`), or serve the client directly from CloudFront as well.
+- Run the Node proxy server anywhere that can reach the API Gateway and
+  CloudFront URLs (`TRADING_API_BASE_URL` / `TRADING_CDN_BASE_URL`), or serve the client
+  directly from CloudFront as well.
 - Use HTTPS and a public WebSocket endpoint for the live market feed when
   hosting the proxy server remotely.

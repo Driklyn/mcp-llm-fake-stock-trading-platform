@@ -244,6 +244,39 @@ variable "assistant_llm_api_key" {
   sensitive   = true
 }
 
+# ---------------------------------------------------------------------------
+# Maximum Safety Guardrails (Budget, Throttling, and Concurrency Caps)
+# ---------------------------------------------------------------------------
+
+variable "budget_notify_email" {
+  type        = string
+  description = "The email address where AWS will send budget warning and action notifications."
+}
+
+variable "budget_limit_usd" {
+  type        = string
+  default     = "1.00"
+  description = "The absolute ceiling maximum monthly budget calculation cap before hard shutdown."
+}
+
+variable "lambda_max_concurrency" {
+  type        = number
+  default     = 2
+  description = "Max concurrent executions for public endpoints to prevent parallel compute abuse."
+}
+
+variable "api_gateway_throttle_burst_limit" {
+  type        = number
+  default     = 10
+  description = "Maximum burst requests allowed simultaneously across all HTTP API routes."
+}
+
+variable "api_gateway_throttle_rate_limit" {
+  type        = number
+  default     = 5
+  description = "Maximum sustained requests per second allowed across all HTTP API routes."
+}
+
 variable "tags" {
   description = "Common resource tags."
   type        = map(string)

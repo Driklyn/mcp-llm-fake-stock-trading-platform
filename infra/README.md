@@ -3,20 +3,20 @@
 100% serverless and VPC-free (no VPCs, subnets, or NAT Gateways), designed to stay
 inside the AWS Always Free Tier.
 
-| Piece             | Technology                                                         | Free-tier impact                          |
-| ----------------- | ------------------------------------------------------------------ | ----------------------------------------- |
-| price store       | DynamoDB `market_price_history`, PROVISIONED 1/1 RCU/WCU, TTL 24h  | 25 GB + 25 RCU/WCU included               |
-| pending store     | DynamoDB `pending_confirmations`, PROVISIONED 1/1 RCU/WCU, TTL 2h  | shares the same 25 GB + 25 RCU/WCU        |
-| cache edge        | CloudFront distribution in front of an HTTP API Gateway            | 1 TB egress + 10M requests / mo included  |
-| API layer         | API Gateway HTTP API, versioned `/api/v1/*` routes                 | 1M requests / mo included                 |
-| tick compute      | `ticks-generator` Lambda (Node 22, 128 MB)                         | ~43k invocations / mo, ~50 ms each        |
-| read compute      | `ticks-fetcher` Lambda (Node 22, 128 MB)                           | absorbed by the CloudFront edge (14s TTL) |
-| trade compute     | `trading-api` Lambda (Node 22, 128 MB)                             | on-demand + reactive fill each tick       |
-| fill trigger      | DynamoDB Stream (INSERT) → `trading-api`                           | 2.5M stream read requests / mo included   |
-| sync compute      | `hourly-sync-engine` Lambda (Node 22, 128 MB)                      | 720 invocations / mo, 1 bulk INSERT each  |
-| chat compute      | `assistant` Lambda (Node 22, 128 MB, Vite-bundled)                 | on-demand, ~50-200 ms per chat message    |
-| relational ledger | Aurora DSQL (PostgreSQL dialect), single region                    | ~0 DPU (one 240-row INSERT / h)           |
-| schedules         | EventBridge `cron(* * * * ? *)` (ticks) + `cron(0 * * * ? *)`      | negligible                                |
+| Piece             | Technology                                                        | Free-tier impact                          |
+| ----------------- | ----------------------------------------------------------------- | ----------------------------------------- |
+| price store       | DynamoDB `market_price_history`, PROVISIONED 1/1 RCU/WCU, TTL 24h | 25 GB + 25 RCU/WCU included               |
+| pending store     | DynamoDB `pending_confirmations`, PROVISIONED 1/1 RCU/WCU, TTL 2h | shares the same 25 GB + 25 RCU/WCU        |
+| cache edge        | CloudFront distribution in front of an HTTP API Gateway           | 1 TB egress + 10M requests / mo included  |
+| API layer         | API Gateway HTTP API, versioned `/api/v1/*` routes                | 1M requests / mo included                 |
+| tick compute      | `ticks-generator` Lambda (Node 22, 128 MB)                        | ~43k invocations / mo, ~50 ms each        |
+| read compute      | `ticks-fetcher` Lambda (Node 22, 128 MB)                          | absorbed by the CloudFront edge (14s TTL) |
+| trade compute     | `trading-api` Lambda (Node 22, 128 MB)                            | on-demand + reactive fill each tick       |
+| fill trigger      | DynamoDB Stream (INSERT) → `trading-api`                          | 2.5M stream read requests / mo included   |
+| sync compute      | `hourly-sync-engine` Lambda (Node 22, 128 MB)                     | 720 invocations / mo, 1 bulk INSERT each  |
+| chat compute      | `assistant` Lambda (Node 22, 128 MB, Vite-bundled)                | on-demand, ~50-200 ms per chat message    |
+| relational ledger | Aurora DSQL (PostgreSQL dialect), single region                   | ~0 DPU (one 240-row INSERT / h)           |
+| schedules         | EventBridge `cron(* * * * ? *)` (ticks) + `cron(0 * * * ? *)`     | negligible                                |
 
 ## Architecture
 
@@ -89,20 +89,20 @@ flowchart TB
 
 ## API Reference (via CloudFront)
 
-| Method | Route                           | Lambda          | Notes                                                                            |
-| ------ | ------------------------------- | --------------- | -------------------------------------------------------------------------------- |
-| GET    | /api/v1/ticks/4h                | ticks-fetcher   | last 4h of 15s ticks (960 pts, oldest-first); `timestamp <= now` gate; 14s edge cache |
-| GET    | /api/v1/ticks/latest            | ticks-fetcher   | most recent realized tick; `timestamp <= now` gate; 14s edge cache                     |
-| POST   | /api/v1/ticks                   | ticks-generator | manual generation of the current minute's 4 slots                                |
-| POST   | /api/v1/trades                  | trading-api     | `{ symbol, side: BUY\|SELL, quantity, idempotencyKey? }`                         |
-| GET    | /api/v1/trades/50              | trading-api     | recent trade history, fixed 50-row window; query strings ignored; 14s edge cache |
-| GET    | /api/v1/portfolio               | trading-api     | account-only: cash, holdings, cost basis, realized gains, equity (activity via /api/v1/trades/50 + /api/v1/transfers/50) |
-| POST   | /api/v1/transfers               | trading-api     | `{ amount: +/-N, idempotencyKey? }`                                              |
-| GET    | /api/v1/transfers/50           | trading-api     | recent transfer history, fixed 50-row window; query strings ignored; 14s edge cache |
-| POST   | /api/v1/orders                  | trading-api     | `{ side, type: limit\|stop, quantity, price, idempotencyKey? }`                  |
-| GET    | /api/v1/orders                  | trading-api     | list orders, `?status=open`                                                      |
-| POST   | /api/v1/orders/{orderId}/cancel | trading-api     | cancel an open order (idempotent)                                                |
-| POST   | /api/v1/orders/process          | trading-api     | internal/manual: fill triggered orders (DynamoDB stream-driven on each tick)     |
+| Method | Route                           | Lambda          | Notes                                                                                                                              |
+| ------ | ------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | /api/v1/ticks/4h                | ticks-fetcher   | last 4h of 15s ticks (960 pts, oldest-first); `timestamp <= now` gate; 14s edge cache                                              |
+| GET    | /api/v1/ticks/latest            | ticks-fetcher   | most recent realized tick; `timestamp <= now` gate; 14s edge cache                                                                 |
+| POST   | /api/v1/ticks                   | ticks-generator | manual generation of the current minute's 4 slots                                                                                  |
+| POST   | /api/v1/trades                  | trading-api     | `{ symbol, side: BUY\|SELL, quantity, idempotencyKey? }`                                                                           |
+| GET    | /api/v1/trades/50               | trading-api     | recent trade history, fixed 50-row window; query strings ignored; 14s edge cache                                                   |
+| GET    | /api/v1/portfolio               | trading-api     | account-only: cash, holdings, cost basis, realized gains, equity (activity via /api/v1/trades/50 + /api/v1/transfers/50)           |
+| POST   | /api/v1/transfers               | trading-api     | `{ amount: +/-N, idempotencyKey? }`                                                                                                |
+| GET    | /api/v1/transfers/50            | trading-api     | recent transfer history, fixed 50-row window; query strings ignored; 14s edge cache                                                |
+| POST   | /api/v1/orders                  | trading-api     | `{ side, type: limit\|stop, quantity, price, idempotencyKey? }`                                                                    |
+| GET    | /api/v1/orders                  | trading-api     | list orders, `?status=open`                                                                                                        |
+| POST   | /api/v1/orders/{orderId}/cancel | trading-api     | cancel an open order (idempotent)                                                                                                  |
+| POST   | /api/v1/orders/process          | trading-api     | internal/manual: fill triggered orders (DynamoDB stream-driven on each tick)                                                       |
 | POST   | /api/v1/assistant               | assistant       | `{ message }` chat request, or `{ action: confirm\|cancel, confirmationId }`; large trades gate on a DynamoDB pending confirmation |
 
 ## Notes
@@ -150,5 +150,6 @@ flowchart TB
   `pending_confirmations` DynamoDB table with a 2h TTL; reads treat expired
   items as missing because DynamoDB TTL garbage collection can lag ~48h.
 - The local dev server (`server/`) is a stateless proxy over this API: set
-  `TRADING_API_URL` to the `trading_api_base_url` Terraform output
-  (`https://<cloudfront-domain>`) when running it.
+  `TRADING_API_BASE_URL` to the `trading_api_base_url` Terraform output (API
+  Gateway domain) and `TRADING_CDN_BASE_URL` to the `trading_cdn_base_url` output
+  (CloudFront domain) when running it.

@@ -71,11 +71,25 @@ function stubClient(overrides = {}) {
       portfolio.totalValue = portfolio.cash + portfolio.investedValue;
       portfolio.totalEquity = portfolio.totalValue;
       portfolio.recentTrades = [
-        { id: 1, symbol: "FAKE", side, quantity, price: fillPrice, created_at: 1787529630 },
+        {
+          id: 1,
+          symbol: "FAKE",
+          side,
+          quantity,
+          price: fillPrice,
+          created_at: 1787529630,
+        },
       ];
       return {
         ok: true,
-        trade: { id: 1, symbol: "FAKE", side, quantity, price: fillPrice, created_at: 1787529630 },
+        trade: {
+          id: 1,
+          symbol: "FAKE",
+          side,
+          quantity,
+          price: fillPrice,
+          created_at: 1787529630,
+        },
         fillPrice,
         portfolio: {
           cash: portfolio.cash,
@@ -140,16 +154,23 @@ test("getPortfolioSummary maps the cloud portfolio into the summary shape", asyn
 });
 
 test("init primes the cache from the cloud", async () => {
-  const previous = process.env.TRADING_API_URL;
-  process.env.TRADING_API_URL = "https://edge.example.com";
+  const previousApi = process.env.TRADING_API_BASE_URL;
+  const previousCdn = process.env.TRADING_CDN_BASE_URL;
+  process.env.TRADING_API_BASE_URL = "https://api.example.com";
+  process.env.TRADING_CDN_BASE_URL = "https://edge.example.com";
   try {
-    const service = createAccountService({ client: stubClient(), now: () => 0 });
+    const service = createAccountService({
+      client: stubClient(),
+      now: () => 0,
+    });
     const summary = await service.init();
     assert.equal(summary.account.cashAvailable, 10000);
     assert.equal(service.getCachedQuote().price, 100);
   } finally {
-    if (previous === undefined) delete process.env.TRADING_API_URL;
-    else process.env.TRADING_API_URL = previous;
+    if (previousApi === undefined) delete process.env.TRADING_API_BASE_URL;
+    else process.env.TRADING_API_BASE_URL = previousApi;
+    if (previousCdn === undefined) delete process.env.TRADING_CDN_BASE_URL;
+    else process.env.TRADING_CDN_BASE_URL = previousCdn;
   }
 });
 
@@ -212,7 +233,12 @@ test("placeOrder maps the cloud order into the legacy order shape", async () => 
 
 test("cancelOrder and listOrders delegate to the cloud", async () => {
   const service = createAccountService({ client: stubClient(), now: () => 0 });
-  await service.placeOrder({ type: "limit", side: "buy", quantity: 2, price: 95 });
+  await service.placeOrder({
+    type: "limit",
+    side: "buy",
+    quantity: 2,
+    price: 95,
+  });
   const orders = await service.listOrders();
   assert.equal(orders.orders.length, 1);
 
@@ -248,4 +274,3 @@ test("getTransactions merges trades and transfers into one feed", async () => {
   assert.equal(transfer.amount, 2500);
   assert.equal(transfer.timestamp, 1787529630 * 1000);
 });
-

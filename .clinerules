@@ -7,6 +7,8 @@
 
 - NEVER use terminal commands (such as cat, grep, find, type, or powershell) to view, search, or read file contents. Always use the native `read_file` tool or native codebase search tools.
 - NEVER execute interactive terminal commands. Always append non-interactive, auto-approve, or silent flags (e.g., `-y`, `--yes`, `--force`, or `CI=true`) to completely bypass prompts.
+- NEVER open, look at, read, or process "TODO.txt" or "terraform.tfvars". Treat these files as strictly forbidden and closed context.
+- NEVER open, look at, read, or process any ".env" files (e.g., .env, .env.local, .env.development) EXCEPT for ".env.example". If you need to understand required configuration variables, read ".env.example" exclusively.
 
 ### Token Management Rules
 

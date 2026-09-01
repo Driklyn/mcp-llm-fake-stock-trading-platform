@@ -10,18 +10,21 @@ import {
   createMemoryPendingStore,
   fetchTicks4h,
   fetchLatestTick,
+  getTradingApiBaseUrl,
   isCloudMode,
+  missingBaseUrlMessage,
   requiresConfirmationForTradeValue,
 } from "chat-assistant";
 
 // The server is a stateless proxy over the deployed trading-api ledger
 // (infra/lambdas/trading-api). There is no local account state anymore —
-// every read and mutation is delegated to TRADING_API_URL.
+// dynamic routes are delegated to TRADING_API_BASE_URL (API Gateway) and the
+// cached ticks/ledger feeds to TRADING_CDN_BASE_URL (CloudFront).
 if (!isCloudMode()) {
-  console.error(
-    "TRADING_API_URL is not set. Point it at the deployed trading-api base URL " +
-      "(terraform output `trading_api_base_url`, e.g. https://dxxxx.cloudfront.net).",
-  );
+  const missing = getTradingApiBaseUrl()
+    ? "TRADING_CDN_BASE_URL"
+    : "TRADING_API_BASE_URL";
+  console.error(missingBaseUrlMessage(missing));
   process.exit(1);
 }
 

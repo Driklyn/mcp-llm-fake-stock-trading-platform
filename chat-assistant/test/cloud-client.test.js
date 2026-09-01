@@ -3,8 +3,12 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import {
   TradingApiError,
+  fetchLatestTick,
   fetchOrders,
   fetchPortfolio,
+  fetchTicks4h,
+  fetchTrades,
+  fetchTransfers,
   isCloudMode,
   postTrade,
   postTransfer,
@@ -19,25 +23,35 @@ function startFakeApi(handler) {
   });
 }
 
-function withEnv(baseUrl, fn) {
-  const previous = process.env.TRADING_API_URL;
-  process.env.TRADING_API_URL = baseUrl;
+function withEnv(apiBaseUrl, cdnBaseUrl, fn) {
+  const previousApi = process.env.TRADING_API_BASE_URL;
+  const previousCdn = process.env.TRADING_CDN_BASE_URL;
+  process.env.TRADING_API_BASE_URL = apiBaseUrl;
+  process.env.TRADING_CDN_BASE_URL = cdnBaseUrl;
   return fn().finally(() => {
-    if (previous === undefined) delete process.env.TRADING_API_URL;
-    else process.env.TRADING_API_URL = previous;
+    if (previousApi === undefined) delete process.env.TRADING_API_BASE_URL;
+    else process.env.TRADING_API_BASE_URL = previousApi;
+    if (previousCdn === undefined) delete process.env.TRADING_CDN_BASE_URL;
+    else process.env.TRADING_CDN_BASE_URL = previousCdn;
   });
 }
 
-test("isCloudMode reflects TRADING_API_URL", () => {
-  const previous = process.env.TRADING_API_URL;
+test("isCloudMode requires both TRADING_API_BASE_URL and TRADING_CDN_BASE_URL", () => {
+  const previousApi = process.env.TRADING_API_BASE_URL;
+  const previousCdn = process.env.TRADING_CDN_BASE_URL;
   try {
-    delete process.env.TRADING_API_URL;
+    delete process.env.TRADING_API_BASE_URL;
+    delete process.env.TRADING_CDN_BASE_URL;
     assert.equal(isCloudMode(), false);
-    process.env.TRADING_API_URL = " https://edge.example.com/ ";
+    process.env.TRADING_API_BASE_URL = " https://api.example.com/ ";
+    assert.equal(isCloudMode(), false); // CDN base still missing
+    process.env.TRADING_CDN_BASE_URL = " https://edge.example.com/ ";
     assert.equal(isCloudMode(), true);
   } finally {
-    if (previous === undefined) delete process.env.TRADING_API_URL;
-    else process.env.TRADING_API_URL = previous;
+    if (previousApi === undefined) delete process.env.TRADING_API_BASE_URL;
+    else process.env.TRADING_API_BASE_URL = previousApi;
+    if (previousCdn === undefined) delete process.env.TRADING_CDN_BASE_URL;
+    else process.env.TRADING_CDN_BASE_URL = previousCdn;
   }
 });
 
@@ -49,7 +63,7 @@ test("fetchPortfolio GETs /api/v1/portfolio", async () => {
     res.end(JSON.stringify({ ok: true, cash: 10000 }));
   });
   try {
-    const data = await withEnv(baseUrl, () => fetchPortfolio());
+    const data = await withEnv(baseUrl, baseUrl, () => fetchPortfolio());
     assert.deepEqual(data, { ok: true, cash: 10000 });
     assert.equal(requests.length, 1);
     assert.equal(requests[0].method, "GET");
@@ -71,7 +85,7 @@ test("postTrade sends the trade payload with a fresh idempotencyKey", async () =
     });
   });
   try {
-    await withEnv(baseUrl, () =>
+    await withEnv(baseUrl, baseUrl, () =>
       postTrade({ symbol: "FAKE", side: "BUY", quantity: 2 }),
     );
     assert.equal(received.method, "POST");
@@ -93,7 +107,7 @@ test("fetchOrders passes through the status query parameter", async () => {
     res.end(JSON.stringify({ ok: true, orders: [] }));
   });
   try {
-    await withEnv(baseUrl, () => fetchOrders("open"));
+    await withEnv(baseUrl, baseUrl, () => fetchOrders("open"));
     assert.deepEqual(requests, ["/api/v1/orders?status=open"]);
   } finally {
     server.close();
@@ -108,7 +122,7 @@ test("non-2xx responses throw TradingApiError with the API error message", async
   });
   try {
     await assert.rejects(
-      withEnv(baseUrl, () => postTransfer({ amount: -1 })),
+      withEnv(baseUrl, baseUrl, () => postTransfer({ amount: -1 })),
       (error) =>
         error instanceof TradingApiError &&
         error.status === 400 &&
@@ -119,13 +133,69 @@ test("non-2xx responses throw TradingApiError with the API error message", async
   }
 });
 
-test("requests fail fast when TRADING_API_URL is unset", async () => {
-  const previous = process.env.TRADING_API_URL;
-  delete process.env.TRADING_API_URL;
+test("requests fail fast when TRADING_API_BASE_URL is unset", async () => {
+  const previous = process.env.TRADING_API_BASE_URL;
+  delete process.env.TRADING_API_BASE_URL;
   try {
-    await assert.rejects(fetchPortfolio(), /TRADING_API_URL is not set/);
+    await assert.rejects(fetchPortfolio(), /TRADING_API_BASE_URL is not set/);
   } finally {
-    if (previous === undefined) delete process.env.TRADING_API_URL;
-    else process.env.TRADING_API_URL = previous;
+    if (previous === undefined) delete process.env.TRADING_API_BASE_URL;
+    else process.env.TRADING_API_BASE_URL = previous;
+  }
+});
+
+test("requests fail fast when TRADING_CDN_BASE_URL is unset", async () => {
+  const previous = process.env.TRADING_CDN_BASE_URL;
+  delete process.env.TRADING_CDN_BASE_URL;
+  try {
+    await assert.rejects(fetchLatestTick(), /TRADING_CDN_BASE_URL is not set/);
+  } finally {
+    if (previous === undefined) delete process.env.TRADING_CDN_BASE_URL;
+    else process.env.TRADING_CDN_BASE_URL = previous;
+  }
+});
+
+test("ticks and ledger feeds route through TRADING_CDN_BASE_URL", async () => {
+  const requests = [];
+  const { server, baseUrl } = await startFakeApi((req, res) => {
+    requests.push({ method: req.method, url: req.url });
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ ok: true }));
+  });
+  try {
+    // TRADING_API_BASE_URL points at a dead port; only the CDN base can serve these.
+    await withEnv("http://127.0.0.1:1", baseUrl, async () => {
+      await fetchLatestTick();
+      await fetchTicks4h();
+      await fetchTrades();
+      await fetchTransfers();
+    });
+    assert.deepEqual(
+      requests.map((r) => r.url),
+      [
+        "/api/v1/ticks/latest",
+        "/api/v1/ticks/4h",
+        "/api/v1/trades/50",
+        "/api/v1/transfers/50",
+      ],
+    );
+  } finally {
+    server.close();
+  }
+});
+
+test("dynamic routes use TRADING_API_BASE_URL (not the CDN base)", async () => {
+  const requests = [];
+  const { server, baseUrl } = await startFakeApi((req, res) => {
+    requests.push(req.url);
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify({ ok: true, portfolio: {} }));
+  });
+  try {
+    // TRADING_CDN_BASE_URL points at a dead port; dynamic routes must hit the API base.
+    await withEnv(baseUrl, "http://127.0.0.1:1", () => fetchPortfolio());
+    assert.deepEqual(requests, ["/api/v1/portfolio"]);
+  } finally {
+    server.close();
   }
 });

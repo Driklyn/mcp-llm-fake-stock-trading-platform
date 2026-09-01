@@ -173,7 +173,9 @@ export function createAccountService({
       client.fetchTrades(),
       client.fetchTransfers(),
     ]);
-    const trades = Array.isArray(tradesResult?.trades) ? tradesResult.trades : [];
+    const trades = Array.isArray(tradesResult?.trades)
+      ? tradesResult.trades
+      : [];
     const transfers = Array.isArray(transfersResult?.transfers)
       ? transfersResult.transfers
       : [];
@@ -288,8 +290,9 @@ export function createAccountService({
   async function init() {
     if (!isCloudMode()) {
       throw new Error(
-        "TRADING_API_URL is not set. Point it at the deployed trading-api base URL " +
-          "(terraform output `trading_api_base_url`, e.g. https://dxxxx.cloudfront.net).",
+        "Both TRADING_API_BASE_URL and TRADING_CDN_BASE_URL must be set: " +
+          "TRADING_API_BASE_URL -> API Gateway base (terraform output `trading_api_base_url`); " +
+          "TRADING_CDN_BASE_URL -> CloudFront base (terraform output `trading_cdn_base_url`).",
       );
     }
     const [portfolio, quote] = await Promise.all([

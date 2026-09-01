@@ -3,12 +3,13 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "node src/server.js",
-    "start": "node src/server.js",
-    "mcp": "node src/mcp/index.js",
-    "test": "node --test"
+    "dev": "dotenvx run -- node src/server.js",
+    "start": "dotenvx run -- node src/server.js",
+    "mcp": "dotenvx run -- node src/mcp/index.js",
+    "test": "dotenvx run -- node --test"
   },
   "dependencies": {
+    "@dotenvx/dotenvx": "^2.23.0",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "chat-assistant": "*",
     "express": "^4.21.2",

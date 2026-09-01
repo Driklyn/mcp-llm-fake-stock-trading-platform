@@ -3,4 +3,6 @@ client/dist/
 server/.cache/
 .git/
 *.log
+.env*
+!.env.example
 TODO.txt
