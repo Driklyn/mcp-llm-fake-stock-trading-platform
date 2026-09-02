@@ -57,7 +57,7 @@ export const tabContent = style({
   flex: 1,
   minHeight: space.none,
   height: space.full,
-  overflow: "hidden",
+  overflow: "auto",
 });
 
 export const hidden = style({

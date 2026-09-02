@@ -16,7 +16,7 @@ export const layout = style({
   gap: space.xl,
   alignItems: "stretch",
   gridTemplateColumns: "2fr 1fr",
-  height: 560,
+  height: 635,
 
   "@media": {
     "(max-width: 1023px)": {
