@@ -41,7 +41,12 @@ function stubClient(overrides = {}) {
           realizedGains,
           unrealizedGains,
           totalGainsLosses: realizedGains + unrealizedGains,
-          holdings: portfolio.holdings.length,
+          // Mirror trading-api's semantic: Holdings = total net shares held
+          // (sum of open position quantities), not the count of distinct symbols.
+          holdings: portfolio.holdings.reduce(
+            (sum, h) => sum + (Number(h.quantity) > 0 ? Number(h.quantity) : 0),
+            0,
+          ),
           totalEquity: Number(
             portfolio.totalEquity ?? cashAvailable + investedValue,
           ),

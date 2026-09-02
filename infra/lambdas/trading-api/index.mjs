@@ -264,6 +264,18 @@ export function orderTriggered(order, currentPrice) {
   return false;
 }
 
+/**
+ * Total shares currently held = sum of the open position row quantities. Rows
+ * at or below zero (e.g. fully-closed positions) contribute nothing.
+ * Pure — exported for unit tests.
+ */
+export function sumHeldShares(rows) {
+  return (Array.isArray(rows) ? rows : []).reduce(
+    (sum, row) => sum + (Number(row?.quantity) > 0 ? Number(row.quantity) : 0),
+    0,
+  );
+}
+
 async function readCashAndPosition(client, symbol) {
   const cashRows = await client.query(
     "SELECT quantity FROM portfolio WHERE symbol = $1",
@@ -810,7 +822,7 @@ async function getPortfolio(pool, region) {
       realizedGains: round2(realizedGains),
       unrealizedGains,
       totalGainsLosses: round2(realizedGains + unrealizedGains),
-      holdings: holdings.length,
+      holdings: sumHeldShares(holdingRows),
       totalEquity: totalValue,
       cashTransferred,
     },

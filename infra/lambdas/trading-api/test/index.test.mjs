@@ -5,6 +5,7 @@ import {
   applyFill,
   foldTradeLedger,
   orderTriggered,
+  sumHeldShares,
 } from "../index.mjs";
 
 /**
@@ -107,6 +108,32 @@ test("orderTriggered applies limit and stop rules", () => {
 // The fixed-window ledger feed is now consolidated into `/api/v1/transactions/50`.
 // Route-window resolution tests were removed as the feed window is no longer
 // resolved from individual `trades/50` or `transfers/50` routes.
+
+test("sumHeldShares sums multiple open rows", () => {
+  assert.equal(
+    sumHeldShares([
+      { symbol: "FAKE", quantity: "30" },
+      { symbol: "OTHER", quantity: "10" },
+    ]),
+    40,
+  );
+});
+
+test("sumHeldShares ignores zero and negative rows", () => {
+  assert.equal(
+    sumHeldShares([
+      { symbol: "FAKE", quantity: 5 },
+      { symbol: "ZERO", quantity: 0 },
+      { symbol: "NEG", quantity: -3 },
+    ]),
+    5,
+  );
+});
+
+test("sumHeldShares returns 0 for empty and undefined input", () => {
+  assert.equal(sumHeldShares([]), 0);
+  assert.equal(sumHeldShares(undefined), 0);
+});
 
 test("applyFill buys shares and reduces cash", async () => {
   const { client, portfolio } = makeFakeClient({ cash: 10000 });
