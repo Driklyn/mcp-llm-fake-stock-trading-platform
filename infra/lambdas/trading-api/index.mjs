@@ -446,25 +446,6 @@ async function executeTrade(pool, region, body) {
   }
 }
 
-async function getTrades(pool, limit) {
-  const { rows } = await pool.query(
-    `SELECT id, symbol, side, quantity, price, created_at
-     , type
-     FROM trades ORDER BY id DESC LIMIT $1`,
-    [limit],
-  );
-  return { ok: true, trades: rows };
-}
-
-async function getTransfers(pool, limit) {
-  const { rows } = await pool.query(
-    `SELECT id, amount, created_at
-     FROM transfers ORDER BY id DESC LIMIT $1`,
-    [limit],
-  );
-  return { ok: true, transfers: rows };
-}
-
 async function getTransactions(pool, limit) {
   const { rows } = await pool.query(
     `SELECT "table", id, symbol, side, type, quantity, price, amount, created_at FROM (
@@ -478,7 +459,33 @@ async function getTransactions(pool, limit) {
      LIMIT $1`,
     [limit],
   );
-  return { ok: true, transactions: rows };
+
+  // The UNION query returns fixed-width rows with null-padded placeholders for
+  // columns that don't belong to a given table. Shape each row right after the
+  // query so the JSON payload only carries that table's own columns:
+  //   transfer        → { table, id, amount, created_at }
+  //   trade / order   → { table, id, symbol, side, type, quantity, price, created_at }
+  const transactions = rows.map((row) => {
+    if (row.table === "transfer") {
+      return {
+        table: row.table,
+        id: row.id,
+        amount: row.amount,
+        created_at: row.created_at,
+      };
+    }
+    return {
+      table: row.table,
+      id: row.id,
+      symbol: row.symbol,
+      side: row.side,
+      type: row.type,
+      quantity: row.quantity,
+      price: row.price,
+      created_at: row.created_at,
+    };
+  });
+  return { ok: true, transactions };
 }
 
 async function postTransfer(pool, body) {
@@ -792,16 +799,21 @@ async function getPortfolio(pool, region) {
   );
   const cashTransferred = round2(Number(transfersResult.rows[0]?.total ?? 0));
 
+  const unrealizedGains = round2(investedValue - costBasis);
+
   return {
     ok: true,
-    cash,
-    holdings,
-    totalValue,
-    costBasis,
-    realizedGains: round2(realizedGains),
-    investedValue,
-    totalEquity: totalValue,
-    cashTransferred,
+    account: {
+      cashAvailable: cash,
+      investedValue,
+      costBasis,
+      realizedGains: round2(realizedGains),
+      unrealizedGains,
+      totalGainsLosses: round2(realizedGains + unrealizedGains),
+      holdings: holdings.length,
+      totalEquity: totalValue,
+      cashTransferred,
+    },
     generatedAt: Math.floor(Date.now() / 1000),
   };
 }

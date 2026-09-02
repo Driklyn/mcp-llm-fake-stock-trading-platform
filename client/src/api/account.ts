@@ -1,20 +1,16 @@
 /**
- * Maps the serverless cloud responses (`GET /api/v1/portfolio` + ticks, plus
- * the dedicated `/api/v1/transactions/50` feed for transactions) into the exact
- * shapes the React UI consumes. This is the client mirror of
- * `server/src/trading/account.js` (`toSummary` / `toTransaction`), so
- * direct-mode and proxy-mode rendering stay identical.
+ * Maps the serverless cloud responses into the exact shapes the React UI
+ * consumes. The account summary now arrives precomputed from the server in
+ * both modes (`CloudPortfolioResponse.account`), so the only client-side
+ * mapping left is the raw ledger feed — every `CloudTransaction` row is mapped
+ * to a `Transaction` here, once, for direct mode and proxy mode alike. This is
+ * the client mirror of the shared `chat-assistant` service mapper
+ * (`chat-assistant/src/trading/account.js`).
  */
 
 import type { Transaction } from "ui";
-import type { Account, ChartInputPoint } from "../types";
-import type {
-  CloudOrder,
-  CloudPortfolio,
-  CloudTicks,
-  CloudTrade,
-  CloudTransfer,
-} from "./cloud";
+import type { ChartInputPoint } from "../types";
+import type { CloudTicks, CloudTransaction } from "./cloud";
 
 function round2(value: number): number {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
@@ -60,102 +56,73 @@ export function mergeCloudTicks(
   };
 }
 
-function toTransaction(entry: CloudTrade | CloudTransfer): Transaction {
-  if ("side" in entry) {
-    const side = String(entry.side).toLowerCase() as "buy" | "sell";
-    const quantity = Number(entry.quantity);
-    const price = Number(entry.price);
-    return {
-      id: `trade-${entry.id}`,
-      kind: side,
-      side,
-      quantity,
-      price,
-      amount: round2(quantity * price),
-      status: "completed",
-      timestamp: Number(entry.created_at) * 1000,
-    };
+function toTransaction(entry: CloudTransaction): Transaction {
+  switch (entry.table) {
+    // A filled market/limit/stop order. Trades carry the originating order
+    // type when a limit/stop order executed ("limit" | "stop"); market fills
+    // have a null type, so fall back to the execution side.
+    case "trade": {
+      const side = String(entry.side).toLowerCase() as "buy" | "sell";
+      const quantity = Number(entry.quantity);
+      const price = Number(entry.price);
+      return {
+        id: `trade-${entry.id}`,
+        kind: entry.type
+          ? (String(entry.type).toLowerCase() as "limit" | "stop")
+          : side,
+        side,
+        quantity,
+        price,
+        amount: round2(quantity * price),
+        status: "completed",
+        timestamp: Number(entry.created_at) * 1000,
+      };
+    }
+    // Deposit (positive) or withdrawal (negative). Transfer rows only carry
+    // id/amount/created_at — no side/quantity/price keys, so the history table
+    // never renders null/0 columns.
+    case "transfer": {
+      const amount = Number(entry.amount);
+      return {
+        id: `transfer-${entry.id}`,
+        kind: amount >= 0 ? "deposit" : "withdrawal",
+        amount: Math.abs(amount),
+        status: "completed",
+        timestamp: Number(entry.created_at) * 1000,
+      };
+    }
+    // Open limit/stop order, surfaced as a pending row so the "limit"/"stop"
+    // type chips and the "open" state chip have data to show.
+    case "order": {
+      const quantity = Number(entry.quantity);
+      const price = Number(entry.price);
+      return {
+        id: `order-${entry.id}`,
+        orderId: String(entry.id),
+        kind: String(entry.type ?? "").toLowerCase() as "limit" | "stop",
+        side: String(entry.side ?? "").toLowerCase() as "buy" | "sell",
+        quantity,
+        price,
+        amount: round2(quantity * price),
+        status: "open",
+        timestamp: Number(entry.created_at ?? 0) * 1000,
+      };
+    }
   }
-  const amount = Number(entry.amount);
-  return {
-    id: `transfer-${entry.id}`,
-    kind: amount >= 0 ? "deposit" : "withdrawal",
-    amount: Math.abs(amount),
-    status: "completed",
-    timestamp: Number(entry.created_at) * 1000,
-  };
-}
-
-function orderToTransaction(order: CloudOrder): Transaction {
-  const quantity = Number(order.quantity);
-  const price = Number(order.price);
-  return {
-    id: `order-${order.id}`,
-    orderId: String(order.id),
-    kind: String(order.type ?? "").toLowerCase() as "limit" | "stop",
-    side: String(order.side ?? "").toLowerCase() as "buy" | "sell",
-    quantity,
-    price,
-    amount: round2(quantity * price),
-    status: "open",
-    timestamp: Number(order.created_at ?? 0) * 1000,
-  };
 }
 
 /**
- * Map a CloudPortfolio + the dedicated trades/transfers feeds plus the open
- * order book into the account summary + transaction list the UI renders
- * (holdings/cash/transaction math only — no price, history, or orders). Open
- * orders become the "open" limit/stop rows in the history table.
+ * Map the raw ledger feed (trades + transfers + open orders in a single
+ * `CloudTransaction[]`, newest-first as returned by the API) into the sorted,
+ * capped transaction list the UI renders. The account summary itself is not
+ * computed here — it arrives precomputed in `CloudPortfolioResponse.account`.
  */
-export function portfolioToSummary(
-  portfolio: CloudPortfolio,
-  trades: CloudTrade[],
-  transfers: CloudTransfer[],
-  orders: CloudOrder[],
-): {
-  account: Account;
-  transactions: Transaction[];
-} {
-  const holdingsRows = Array.isArray(portfolio?.holdings)
-    ? portfolio.holdings
-    : [];
-  const holdings = holdingsRows.reduce(
-    (sum, holding) => sum + Number(holding.quantity ?? 0),
-    0,
-  );
-
-  const cashAvailable = Number(portfolio?.cash ?? 0);
-  const costBasis = Number(portfolio?.costBasis ?? 0);
-  const investedValue = Number(portfolio?.investedValue ?? 0);
-  const totalEquity = Number(
-    portfolio?.totalEquity ?? cashAvailable + investedValue,
-  );
-  const realizedGains = Number(portfolio?.realizedGains ?? 0);
-  const unrealizedGains = investedValue - costBasis;
-  const totalGainsLosses = realizedGains + unrealizedGains;
-
-  const account: Account = {
-    cashAvailable,
-    investedValue,
-    costBasis,
-    realizedGains,
-    unrealizedGains,
-    totalGainsLosses,
-    holdings,
-    totalEquity,
-    cashTransferred: Number(portfolio?.cashTransferred ?? 0),
-  };
-
-  const transactions = [
-    ...trades.map((trade) => toTransaction(trade)),
-    ...transfers.map((transfer) => toTransaction(transfer)),
-    ...orders.map((order) => orderToTransaction(order)),
-  ]
-    .sort((a, b) => b.timestamp - a.timestamp)
-    .slice(0, 50);
-
-  return { account, transactions };
+export function mapCloudTransactions(
+  transactions: CloudTransaction[],
+): Transaction[] {
+  return (Array.isArray(transactions) ? transactions : [])
+    .map((entry) => toTransaction(entry))
+    .sort((a, b) => b.timestamp - a.timestamp);
 }
 
 /**

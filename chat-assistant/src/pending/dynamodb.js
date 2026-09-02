@@ -58,8 +58,7 @@ export function createDynamoPendingStore({
   const nowSeconds = () => Math.floor(now() / 1000);
 
   const isExpired = (item) =>
-    !item ||
-    (Number(item.ttl ?? 0) > 0 && Number(item.ttl) <= nowSeconds());
+    !item || (Number(item.ttl ?? 0) > 0 && Number(item.ttl) <= nowSeconds());
 
   return {
     async put(entry) {
@@ -71,7 +70,12 @@ export function createDynamoPendingStore({
           Item: toItem(entry, confirmationId, createdAt, ttlSeconds),
         }),
       );
-      return { ...entry, confirmationId, createdAt, ttl: createdAt + ttlSeconds };
+      return {
+        ...entry,
+        confirmationId,
+        createdAt,
+        ttl: createdAt + ttlSeconds,
+      };
     },
     async get(confirmationId) {
       const { Item } = await client.send(
@@ -90,16 +94,6 @@ export function createDynamoPendingStore({
           Key: { confirmationId: { S: String(confirmationId) } },
         }),
       );
-    },
-    async mostRecent() {
-      // Scan is fine here: the table only ever holds a handful of unconfirmed
-      // trades at once, and PROVISIONED 1/1 capacity keeps it free-tier friendly.
-      const { Items = [] } = await client.send(
-        new ScanCommand({ TableName: tableName }),
-      );
-      const live = Items.map(fromItem).filter((item) => !isExpired(item));
-      live.sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0));
-      return live.length ? live[live.length - 1] : null;
     },
     async size() {
       const { Items = [] } = await client.send(

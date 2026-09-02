@@ -7,7 +7,7 @@ chart, and a chat panel that can buy, sell, and manage orders in plain English.
 
 **NOTE:** This project was created by Kevin Jurkowski as a portfolio piece. It was created
 entirely using AI tooling (primarily Cline + DeepSeek, along with Google Gemini and the free
-tier of Copilot). At the time of this writing, it took ~50 hours and ~$5.00 to create. [The
+tier of Copilot). At the time of this writing, it took ~60 hours and ~$5.00 to create. [The
 infrastructure](infra/README.md) was designed in such a way that it costs $0/month to run on AWS.
 
 ## Highlights
@@ -97,8 +97,9 @@ One shared package (`chat-assistant/`) powers both hosts:
 
 Supported intents: portfolio snapshots, price quotes, buying/selling shares (by
 quantity or dollar amount), limit and stop orders, cash deposits/withdrawals,
-and listing or canceling orders. Large trades return a confirmation prompt in
-the chat UI (stored in-memory in dev, in DynamoDB in production).
+and listing or canceling orders. Large trades ($1,000+) and cash transfers
+($500+) return a confirmation prompt in the chat UI (stored in-memory in dev,
+in DynamoDB in production).
 
 ## MCP Server
 

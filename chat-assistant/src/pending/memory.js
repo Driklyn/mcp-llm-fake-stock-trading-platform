@@ -24,12 +24,6 @@ export function createMemoryPendingStore() {
     async remove(confirmationId) {
       items.delete(confirmationId);
     },
-    async mostRecent() {
-      const entries = [...items.entries()];
-      if (entries.length === 0) return null;
-      const [confirmationId, item] = entries[entries.length - 1];
-      return { ...item, confirmationId };
-    },
     async size() {
       return items.size;
     },

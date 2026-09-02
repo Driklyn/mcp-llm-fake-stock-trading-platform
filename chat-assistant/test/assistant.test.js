@@ -75,15 +75,11 @@ test("explicit confirmation turns off the human-in-the-loop gate", () => {
   assert.equal(plan.arguments.confirm, true);
 });
 
-test("pending confirmation accepts approval phrases like 'I accept'", () => {
-  const plan = buildTradePlan("i accept", {
-    allowNetwork: false,
-    pendingTool: { tool: "buy_stock", arguments: { quantity: 10 } },
-  });
+test("approval phrases alone do not attach to any tool", () => {
+  const plan = buildTradePlan("i accept", { allowNetwork: false });
 
-  assert.equal(plan.tool, "buy_stock");
-  assert.equal(plan.arguments.quantity, 10);
-  assert.equal(plan.arguments.confirm, true);
+  assert.equal(plan.tool, null);
+  assert.deepEqual(plan.arguments, {});
 });
 
 test("small trades do not require confirmation", () => {

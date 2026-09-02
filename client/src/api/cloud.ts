@@ -12,6 +12,12 @@
  * keeps the deployed /api/v1/ticks/* routes, proxy mode uses the Node server's
  * non-versioned /api/ticks/* passthrough.
  *
+ * Both modes return the same raw Cloud payload shapes. The account summary
+ * (`CloudPortfolioResponse.account`) is precomputed by the trading-api in
+ * direct mode and relayed by the Node server in proxy mode; the ledger feed
+ * (`CloudTransactionsResponse.transactions`) ships raw rows that the client
+ * maps to `Transaction` once, in `account.ts`.
+ *
  * CORS is already configured end-to-end: API Gateway allows `*` origins and
  * both Lambdas return `Access-Control-Allow-Origin: *`.
  *
@@ -20,55 +26,67 @@
  */
 
 import { apiBaseUrl, cdnBaseUrl, isDirectMode } from "../config";
-import type { PortfolioResponse, TransactionsResponse } from "../types";
+import type { Account } from "../types";
 
-export type CloudHolding = {
-  symbol: string;
-  quantity: number;
-  averagePrice: number;
-  currentPrice: number;
-  value: number;
-};
+export type CloudTradeSide = "BUY" | "SELL";
+export type CloudOrderType = "limit" | "stop";
+export type CloudOrderStatus = "open" | "cancelled" | "filled";
 
 export type CloudOrder = {
   id: number;
   symbol: string;
-  side: string;
-  type: string;
+  side: CloudTradeSide;
+  type: CloudOrderType;
   quantity: number;
   price: number;
-  status: string;
+  status: CloudOrderStatus;
   created_at: number;
   executed_at: number | null;
   fill_price: number | null;
 };
 
-export type CloudTrade = {
-  id: number;
-  symbol: string;
-  side: string;
-  quantity: number;
-  price: number;
-  created_at: number;
-};
-
-export type CloudTransfer = {
-  id: number;
-  amount: number;
-  created_at: number;
-};
-
-export type CloudPortfolio = {
+export type CloudPortfolioResponse = {
   ok?: boolean;
-  cash: number;
-  holdings: CloudHolding[];
-  totalValue: number;
-  costBasis: number;
-  realizedGains: number;
-  investedValue: number;
-  totalEquity: number;
-  cashTransferred: number;
-  generatedAt: number;
+  account: Account;
+  generatedAt?: number;
+};
+
+// Raw ledger rows from the fixed-window feed (GET /api/v1/transactions/50 and
+// the proxy-mode /api/transactions relay). Each row carries only its own
+// table's columns (no null-padded placeholders), discriminated on `table`.
+// The client maps every row to the UI `Transaction` shape in account.ts.
+export type CloudTransaction =
+  | {
+      table: "trade";
+      id: number;
+      symbol: string;
+      side: CloudTradeSide;
+      // "limit" | "stop" when a limit/stop order filled, else null (market).
+      type: CloudOrderType | null;
+      quantity: number;
+      price: number;
+      created_at: number;
+    }
+  | {
+      table: "transfer";
+      id: number;
+      amount: number;
+      created_at: number;
+    }
+  | {
+      table: "order";
+      id: number;
+      symbol: string;
+      side: CloudTradeSide;
+      type: CloudOrderType;
+      quantity: number;
+      price: number;
+      created_at: number;
+    };
+
+export type CloudTransactionsResponse = {
+  ok?: boolean;
+  transactions: CloudTransaction[];
 };
 
 export type CloudTicks = {
@@ -130,28 +148,18 @@ export function newIdempotencyKey(): string {
 
 export async function fetchPortfolio(
   signal?: AbortSignal,
-): Promise<CloudPortfolio> {
-  return request<CloudPortfolio>(apiBaseUrl, "/api/v1/portfolio", { signal });
+): Promise<CloudPortfolioResponse> {
+  return request<CloudPortfolioResponse>(
+    apiBaseUrl,
+    isDirectMode ? "/api/v1/portfolio" : "/api/portfolio",
+    { signal },
+  );
 }
-
-export type CloudTradesResponse = {
-  ok: boolean;
-  trades: CloudTrade[];
-};
-
-export type CloudTransfersResponse = {
-  ok: boolean;
-  transfers: CloudTransfer[];
-};
 
 export type CloudOrdersResponse = {
   ok: boolean;
   orders: CloudOrder[];
 };
-
-// Direct mode only (proxy mode uses fetchTransactions against the Node server
-// instead). The fixed-window /50 feeds are served through the CloudFront edge
-// (cdnBaseUrl) with the 14s ledger cache — same routing as the ticks reads.
 
 export async function fetchOrders(
   signal?: AbortSignal,
@@ -179,36 +187,23 @@ export async function fetchLatestTick(
   );
 }
 
-// Proxy-mode endpoints served by the Node dev server: already-mapped account /
-// transaction summaries. Direct mode keeps using fetchPortfolio() + the
-// client-side portfolioToSummary mapper instead.
-export async function fetchPortfolioSummary(
-  signal?: AbortSignal,
-): Promise<PortfolioResponse> {
-  return request<PortfolioResponse>(apiBaseUrl, "/api/portfolio", { signal });
-}
-
 export async function fetchTransactions(
   signal?: AbortSignal,
-): Promise<TransactionsResponse> {
-  // In direct (cdn) mode use the cached CDN ledger feed; in proxy mode
-  // the Node server exposes `/api/transactions`.
-  if (isDirectMode) {
-    return request<TransactionsResponse>(
-      cdnBaseUrl,
-      "/api/v1/transactions/50",
-      { signal },
-    );
-  }
-  return request<TransactionsResponse>(apiBaseUrl, "/api/transactions", {
-    signal,
-  });
+): Promise<CloudTransactionsResponse> {
+  // The ledger feed is served through the CloudFront edge (14s cache) in
+  // direct mode; proxy mode relays the raw rows through the Node server's
+  // /api/transactions passthrough. Both return the same Cloud payload shape.
+  return request<CloudTransactionsResponse>(
+    cdnBaseUrl,
+    isDirectMode ? "/api/v1/transactions/50" : "/api/transactions",
+    { signal },
+  );
 }
 
 export type CloudTradeResult = {
   ok: boolean;
   replay?: boolean;
-  trade?: CloudTrade;
+  trade?: Omit<Extract<CloudTransaction, { table: "trade" }>, "table">;
   fillPrice?: number;
   portfolio?: {
     cash: number;
@@ -237,7 +232,7 @@ export async function postTrade(
 export type CloudTransferResult = {
   ok: boolean;
   replay?: boolean;
-  transfer?: CloudTransfer;
+  transfer?: Omit<Extract<CloudTransaction, { table: "transfer" }>, "table">;
   amount: number;
   cash: number;
 };

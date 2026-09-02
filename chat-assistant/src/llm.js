@@ -79,14 +79,9 @@ export function requiresConfirmationForTrade(quantity, pricePerShare) {
   return qty * price >= 1000;
 }
 
-export function parseToolPlan(
-  rawPlan,
-  fallbackPrompt,
-  pendingTool = undefined,
-) {
+export function parseToolPlan(rawPlan, fallbackPrompt) {
   const fallback = buildTradePlan(fallbackPrompt, {
     allowNetwork: false,
-    pendingTool,
   });
   if (!rawPlan || typeof rawPlan !== "string") {
     return fallback;
@@ -141,21 +136,10 @@ export function buildTradePlan(prompt, options = {}) {
   const allowNetwork = options.allowNetwork !== false;
   const livePrice = Number(options.pricePerShare ?? 100);
   const text = normalizeText(prompt);
-  const pendingTool = options.pendingTool;
   const wantsConfirmation =
     /(^|\s)(confirm|confirmed|accepted|accept|yes|proceed|go ahead|execute|approve|approved)(\s|$)/.test(
       text,
     );
-
-  if (pendingTool && wantsConfirmation) {
-    return {
-      tool: pendingTool.tool,
-      arguments: {
-        ...(pendingTool.arguments ?? {}),
-        confirm: true,
-      },
-    };
-  }
 
   if (
     !/(portfolio|account|balance|equity|cash|holdings|invested|worth|quote|price|market|ticker|fake|buy|purchase|acquire|own|grab|sell|liquidate|exit|dump|deposit|add cash|fund|transfer.*in|put in|top up|withdraw|remove cash|cash out|transfer.*out|take out|limit|stop|orders?|pending|cancel|remove)/.test(
@@ -381,7 +365,6 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
   const plan = buildTradePlan(prompt, {
     allowNetwork: true,
     pricePerShare,
-    pendingTool: dependencies.pendingTool,
   });
 
   if (plan.tool === null || !fetchFn) {
@@ -456,7 +439,6 @@ export async function getAssistantResponse(prompt, dependencies = {}) {
     const parsedPlan = parseToolPlan(
       toolCallContent || String(rawContent),
       prompt,
-      dependencies.pendingTool,
     );
 
     const normalizedText = normalizeText(prompt);

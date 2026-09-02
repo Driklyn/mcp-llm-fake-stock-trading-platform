@@ -25,12 +25,29 @@ function stubClient(overrides = {}) {
 
   const client = {
     async fetchPortfolio() {
+      // Mirror trading-api's getPortfolio: the 9-field account object is
+      // precomputed server-side and shipped as `{ ok, account, generatedAt }`.
+      const cashAvailable = Number(portfolio.cash ?? 0);
+      const investedValue = Number(portfolio.investedValue ?? 0);
+      const costBasis = Number(portfolio.costBasis ?? 0);
+      const realizedGains = Number(portfolio.realizedGains ?? 0);
+      const unrealizedGains = investedValue - costBasis;
       return {
-        ...portfolio,
-        holdings: [...portfolio.holdings],
-        openOrders: [...portfolio.openOrders],
-        recentTrades: [...portfolio.recentTrades],
-        recentTransfers: [...portfolio.recentTransfers],
+        ok: true,
+        account: {
+          cashAvailable,
+          investedValue,
+          costBasis,
+          realizedGains,
+          unrealizedGains,
+          totalGainsLosses: realizedGains + unrealizedGains,
+          holdings: portfolio.holdings.length,
+          totalEquity: Number(
+            portfolio.totalEquity ?? cashAvailable + investedValue,
+          ),
+          cashTransferred: Number(portfolio.cashTransferred ?? 0),
+        },
+        generatedAt: 1787529600,
       };
     },
     async fetchLatestTick() {
@@ -145,7 +162,7 @@ function stubClient(overrides = {}) {
   return client;
 }
 
-test("getPortfolioSummary maps the cloud portfolio into the summary shape", async () => {
+test("getPortfolioSummary relays the precomputed cloud account", async () => {
   const service = createAccountService({ client: stubClient(), now: () => 0 });
   const summary = await service.getPortfolioSummary({ force: true });
 
@@ -154,6 +171,9 @@ test("getPortfolioSummary maps the cloud portfolio into the summary shape", asyn
   assert.equal(summary.account.totalEquity, 10000);
   assert.equal(summary.account.cashTransferred, 0);
   assert.equal(summary.account.holdings, 0);
+  // Only `{ account }` is relayed — the cloud envelope stays server-side.
+  assert.equal(summary.ok, undefined);
+  assert.equal(summary.generatedAt, undefined);
   assert.equal(summary.transactions, undefined);
   // Quote/price data is no longer part of the summary shape.
   assert.equal(summary.price, undefined);
@@ -254,6 +274,29 @@ test("cancelOrder and listOrders delegate to the cloud", async () => {
   const cancelled = await service.cancelOrder("1");
   assert.equal(cancelled.status, "cancelled");
   assert.equal((await service.listOrders()).orders.length, 0);
+});
+
+test("getLedgerTransactions returns the raw cloud rows for the server relay", async () => {
+  const client = stubClient();
+  const service = createAccountService({ client, now: () => 0 });
+
+  await client.postTrade({ side: "BUY", quantity: 5 });
+  await client.postTransfer({ amount: 2500 });
+
+  const rows = await service.getLedgerTransactions({ force: true });
+  assert.equal(rows.length, 2);
+
+  const trade = rows.find((row) => row.table === "trade");
+  assert.equal(trade.id, 1);
+  assert.equal(trade.side, "BUY"); // raw cloud casing — not mapped yet
+  assert.equal(trade.quantity, 5);
+  assert.equal(trade.price, 100);
+
+  const transfer = rows.find((row) => row.table === "transfer");
+  assert.equal(transfer.id, 1);
+  assert.equal(transfer.amount, 2500);
+  assert.equal(transfer.side, undefined); // no null-padded transfer columns
+  assert.equal("kind" in trade, false); // rows pass through unmodified
 });
 
 test("getTransactions merges trades, transfers, and open orders into one feed", async () => {

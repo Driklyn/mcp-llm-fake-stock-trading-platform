@@ -182,18 +182,44 @@ test("an unknown confirmationId is reported as not found", async () => {
   assert.match(body.text, /There is no pending trade/);
 });
 
-test("a natural-language confirmation clears the pending store", async () => {
+test("a typed confirmation word does not resolve a pending trade (UUID required)", async () => {
   const pendingStore = createMemoryPendingStore();
-  const account = stubAccount();
-  const assistant = makeAssistant({ account, pendingStore });
-  await assistant.handleRequest({ message: "buy 12 shares" });
+  const buys = [];
+  const assistant = makeAssistant({
+    account: stubAccount({
+      buy: async (quantity) => {
+        buys.push(quantity);
+        return {
+          kind: "buy",
+          quantity,
+          price: 100,
+          holdings: quantity,
+          cashAvailable: 10000 - 100 * quantity,
+        };
+      },
+    }),
+    pendingStore,
+  });
+  const first = await assistant.handleRequest({ message: "buy 12 shares" });
+  const confirmationId = first.body.payload.confirmationId;
   assert.equal(await pendingStore.size(), 1);
 
+  // Free text can no longer confirm: the plan falls back to generic help,
+  // nothing executes, and the pending row is untouched.
   const { status, body } = await assistant.handleRequest({ message: "yes" });
   assert.equal(status, 200);
-  assert.equal(body.plan.tool, "buy_stock");
-  assert.equal(body.plan.arguments.quantity, 12);
-  assert.equal(body.plan.arguments.confirm, true);
+  assert.equal(body.plan.tool, null);
+  assert.equal(body.payload, null);
+  assert.deepEqual(buys, []);
+  assert.equal(await pendingStore.size(), 1);
+
+  // The explicit UUID action is the only way to execute the pending trade.
+  const confirmed = await assistant.handleRequest({
+    action: "confirm",
+    confirmationId,
+  });
+  assert.equal(confirmed.status, 200);
+  assert.deepEqual(buys, [12]);
   assert.equal(await pendingStore.size(), 0);
 });
 
@@ -244,11 +270,112 @@ test("deposit requests route to transfer_cash", async () => {
     }),
   });
   const { status, body } = await assistant.handleRequest({
-    message: "deposit $500",
+    message: "deposit $200",
   });
   assert.equal(status, 200);
   assert.equal(body.plan.tool, "transfer_cash");
-  assert.deepEqual(transfers, [500]);
+  assert.deepEqual(transfers, [200]);
+  assert.match(body.text, /Cash transfer processed/);
+});
+
+test("transfers of $500 or more require a pending confirmation", async () => {
+  const transfers = [];
+  const assistant = makeAssistant({
+    account: stubAccount({
+      transfer: async (amount) => {
+        transfers.push(amount);
+        return { cashAvailable: 10500 };
+      },
+    }),
+  });
+
+  const deposit = await assistant.handleRequest({
+    message: "deposit $500",
+  });
+  assert.equal(deposit.status, 200);
+  assert.equal(deposit.body.plan.tool, "transfer_cash");
+  assert.equal(deposit.body.payload.requiresConfirmation, true);
+  assert.ok(deposit.body.payload.confirmationId);
+  assert.match(
+    deposit.body.text,
+    /deposit of \$500\.00 requires confirmation/,
+  );
+  assert.deepEqual(transfers, []);
+
+  const withdrawal = await assistant.handleRequest({
+    message: "withdraw $500",
+  });
+  assert.equal(withdrawal.status, 200);
+  assert.equal(withdrawal.body.plan.tool, "transfer_cash");
+  assert.equal(withdrawal.body.payload.requiresConfirmation, true);
+  assert.ok(withdrawal.body.payload.confirmationId);
+  assert.match(
+    withdrawal.body.text,
+    /withdrawal of \$500\.00 requires confirmation/,
+  );
+  assert.deepEqual(transfers, []);
+});
+
+test("confirm action executes a pending transfer", async () => {
+  const transfers = [];
+  const assistant = makeAssistant({
+    account: stubAccount({
+      transfer: async (amount) => {
+        transfers.push(amount);
+        return {
+          transferType: amount >= 0 ? "deposit" : "withdrawal",
+          amount: Math.abs(amount),
+          cashAvailable: 10000 + amount,
+        };
+      },
+    }),
+  });
+
+  const first = await assistant.handleRequest({
+    message: "withdraw $750",
+  });
+  const confirmationId = first.body.payload.confirmationId;
+  assert.ok(confirmationId);
+
+  const { status, body } = await assistant.handleRequest({
+    action: "confirm",
+    confirmationId,
+  });
+  assert.equal(status, 200);
+  assert.deepEqual(transfers, [-750]);
+  assert.equal(body.payload.requiresConfirmation, undefined);
+  assert.match(body.text, /Cash transfer processed/);
+});
+
+test("cancel action drops a pending transfer", async () => {
+  const transfers = [];
+  const assistant = makeAssistant({
+    account: stubAccount({
+      transfer: async (amount) => {
+        transfers.push(amount);
+        return { cashAvailable: 10000 + amount };
+      },
+    }),
+  });
+
+  const first = await assistant.handleRequest({
+    message: "deposit $500",
+  });
+  const confirmationId = first.body.payload.confirmationId;
+  assert.ok(confirmationId);
+
+  const cancelled = await assistant.handleRequest({
+    action: "cancel",
+    confirmationId,
+  });
+  assert.match(cancelled.body.text, /Cancelled pending trade/);
+
+  const again = await assistant.handleRequest({
+    action: "confirm",
+    confirmationId,
+  });
+  assert.match(again.body.text, /There is no pending trade/);
+  assert.deepEqual(transfers, []);
 });
 
 test("limit orders are placed through the account service", async () => {

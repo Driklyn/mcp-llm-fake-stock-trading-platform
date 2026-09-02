@@ -86,8 +86,11 @@ app.get("/api/portfolio", async (req, res) => {
 });
 
 app.get("/api/transactions", async (req, res) => {
+  // Relay the raw ledger rows from trading-api (the same Cloud payload direct
+  // mode reads from GET /api/v1/transactions/50). The client maps every row to
+  // the UI `Transaction` shape once, in client/src/api/account.ts.
   try {
-    res.json({ transactions: await account.getTransactions() });
+    res.json({ transactions: await account.getLedgerTransactions() });
   } catch (error) {
     res.status(503).json({ error: error?.message ?? String(error) });
   }
@@ -218,7 +221,7 @@ async function buildAccountMessage() {
 async function buildTransactionsMessage() {
   return {
     type: "transactions",
-    payload: { transactions: await account.getTransactions() },
+    payload: { transactions: await account.getLedgerTransactions() },
   };
 }
 
@@ -239,7 +242,7 @@ async function fetchTickMessage() {
 async function buildStateMessages() {
   const [summary, transactions, tick] = await Promise.all([
     account.getPortfolioSummary(),
-    account.getTransactions(),
+    account.getLedgerTransactions(),
     fetchLatestTick(),
   ]);
   return [
@@ -250,8 +253,8 @@ async function buildStateMessages() {
 }
 
 // Broadcast the full state as three independent messages. Each message is
-// settled separately so one failing feed (e.g. transactions before the
-// transfers endpoint is deployed) can't take down the account/tick updates.
+// settled separately so one failing feed (e.g. the raw ledger relay) can't take
+// down the account/tick updates.
 async function broadcastState() {
   const [accountMessage, transactionsMessage, tick] = await Promise.allSettled([
     buildAccountMessage(),

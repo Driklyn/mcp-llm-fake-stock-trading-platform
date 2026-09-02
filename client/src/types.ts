@@ -1,5 +1,3 @@
-import type { Transaction } from "ui";
-
 export type Account = {
   cashAvailable: number;
   investedValue: number;
@@ -20,14 +18,6 @@ export type RawChartPoint = {
 };
 
 export type ChartInputPoint = number | RawChartPoint;
-
-export type PortfolioResponse = {
-  account: Account;
-};
-
-export type TransactionsResponse = {
-  transactions: Transaction[];
-};
 
 export type AssistantPayload = {
   message?: string;

@@ -4,8 +4,9 @@
  *
  * createAssistant({ account, pendingStore, llm }) returns a `handleRequest`
  * that turns a chat payload into `{ status, body }`, so any HTTP host can wrap
- * it: Express in dev, API Gateway in production. Large trades ($1,000+) are
- * gated behind a human confirmation stored in the injected pendingStore.
+ * it: Express in dev, API Gateway in production. Large trades ($1,000+) and
+ * cash transfers ($500+) are gated behind a human confirmation stored in the
+ * injected pendingStore.
  */
 
 import { getAssistantResponse, normalizeTradeQuantity } from "./llm.js";
@@ -255,6 +256,32 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
 
     if (tool === TOOL_NAMES.transferCash) {
       const amount = Number(plan.arguments?.amount ?? 0);
+      const confirmed = plan.arguments?.confirm === true;
+
+      // Deposits/withdrawals of $500+ require a human confirmation before the
+      // cash is moved (mirrors the large-trade gate above).
+      if (!confirmed && Number.isFinite(amount) && Math.abs(amount) >= 500) {
+        const { confirmationId: id } = await pendingStore.put({
+          tool,
+          arguments: { ...(plan.arguments ?? {}) },
+        });
+        const transferType = amount >= 0 ? "deposit" : "withdrawal";
+        const absAmount = Math.abs(amount);
+        const pendingMessage = `A cash ${transferType} of $${absAmount.toFixed(2)} requires confirmation. Please confirm before it is processed.`;
+        return {
+          plan,
+          payload: {
+            requiresConfirmation: true,
+            confirmationId: id,
+            message: pendingMessage,
+            transferType,
+            amount: absAmount,
+            value: absAmount,
+          },
+          text: pendingMessage,
+        };
+      }
+
       try {
         const result = await account.transfer(amount);
         return {
@@ -458,13 +485,6 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
         return { status: 200, body: { ...executed, text: executed.text } };
       }
 
-      const hasPending = (await pendingStore.size()) > 0;
-      const confirmationPrompt =
-        hasPending &&
-        /(^|\s)(confirm|confirmed|accepted|accept|yes|proceed|go ahead|approve|approved|execute)(\s|$)/.test(
-          message.toLowerCase(),
-        );
-
       const response = await getAssistantResponse(message, {
         baseUrl: llm.baseUrl,
         chatPath: llm.chatPath,
@@ -472,29 +492,12 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
         model: llm.model,
         fetchFn: llm.fetchFn,
         pricePerShare: await currentPrice(),
-        // If the user replied with a confirmation-like phrase, pass the most
-        // recent pending confirmation so the deterministic planner attaches it.
-        pendingTool: confirmationPrompt
-          ? await pendingStore.mostRecent()
-          : undefined,
       });
 
       const plan = response?.plan ?? {
         tool: TOOL_NAMES.getPortfolioSummary,
         arguments: {},
       };
-      // If this was a natural-language confirmation and the assistant produced
-      // a plan that includes `confirm: true`, clear the most-recent pending
-      // confirmation entry.
-      if (
-        confirmationPrompt &&
-        plan?.arguments?.confirm === true &&
-        hasPending
-      ) {
-        const last = await pendingStore.mostRecent();
-        if (last?.confirmationId)
-          await pendingStore.remove(last.confirmationId);
-      }
       const fallbackText =
         response?.text ??
         "I can help with trading tasks like checking your portfolio, getting the FAKE price, buying or selling shares, depositing or withdrawing cash, and listing or canceling orders.";

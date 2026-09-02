@@ -2,11 +2,13 @@
  * The account service — a stateless proxy over trading-api, shared by the dev
  * server and the chat assistant Lambda.
  *
- * Reproduces the response shapes the UI / MCP / chat layers consume and keeps
- * a 15s in-memory quote + portfolio cache so the broadcast cadence stays cheap.
- * `getPortfolioSummary` returns `{ account }`: the full 9-field account object.
- * Transactions live on the dedicated `getTransactions()` feed. Quote/price data
- * lives in `getQuote` only — summaries never ship price, history, or orders.
+ * trading-api precomputes the 9-field account summary, so `getPortfolioSummary`
+ * relays `result.account` from the cloud response unchanged (no local mapping).
+ * The consolidated ledger feed is exposed two ways: `getLedgerTransactions()`
+ * passes the raw cloud rows through for the proxy/server relay, and the mapped
+ * `getTransactions()` stays for assistant/MCP consumers. Quote/price data lives
+ * in `getQuote` only — summaries never ship price, history, or orders. A 15s
+ * in-memory cache keeps the broadcast cadence cheap.
  *
  * The service is a factory so tests can inject a fake client; the exported
  * `account` singleton uses the real cloudClient and is what server.js and the
@@ -139,68 +141,49 @@ export function createAccountService({
     return quoteCache;
   }
 
-  function toSummary(portfolio) {
-    const holdingsRows = Array.isArray(portfolio?.holdings)
-      ? portfolio.holdings
-      : [];
-    const holdings = holdingsRows.reduce(
-      (sum, holding) => sum + Number(holding.quantity ?? 0),
-      0,
-    );
-    const cashAvailable = Number(portfolio?.cash ?? 0);
-    const costBasis = Number(portfolio?.costBasis ?? 0);
-    const investedValue = Number(portfolio?.investedValue ?? 0);
-    const totalEquity = Number(
-      portfolio?.totalEquity ?? cashAvailable + investedValue,
-    );
-    const realizedGains = Number(portfolio?.realizedGains ?? 0);
-    const unrealizedGains = investedValue - costBasis;
-    const totalGainsLosses = realizedGains + unrealizedGains;
-
-    const account = {
-      cashAvailable,
-      investedValue,
-      costBasis,
-      realizedGains,
-      unrealizedGains,
-      totalGainsLosses,
-      holdings,
-      totalEquity,
-      cashTransferred: Number(portfolio?.cashTransferred ?? 0),
-    };
-
-    return { account };
-  }
-
   async function getPortfolioSummary({ force = false } = {}) {
     if (!force && summaryCache && now() - summaryAt < CACHE_TTL_MS) {
       return summaryCache;
     }
     const portfolio = await client.fetchPortfolio();
-    summaryCache = toSummary(portfolio);
+    summaryCache = { account: portfolio.account };
     summaryAt = now();
     return summaryCache;
   }
 
-  // Independent transaction feed backed by the dedicated trades/transfers
-  // endpoints plus the open order book (orders are the "open" limit/stop rows
-  // in the history table), cached like the summary so the 15s broadcast
-  // cadence stays cheap.
-  async function getTransactions({ force = false } = {}) {
+  // Fetch the raw consolidated ledger rows (GET /api/v1/transactions/50 — the
+  // trading-api UNION of trades + transfers + open orders) once per cache
+  // window, then serve them unmodified to the proxy relay and mapped to the
+  // assistant/MCP feed from the same cached fetch.
+  async function fetchLedgerRows({ force = false } = {}) {
     if (!force && transactionsCache && now() - transactionsAt < CACHE_TTL_MS) {
       return transactionsCache;
     }
     const result = await client.fetchTransactions();
     const rows = Array.isArray(result?.transactions) ? result.transactions : [];
-    transactionsCache = rows
+    transactionsCache = rows;
+    transactionsAt = now();
+    return transactionsCache;
+  }
+
+  // Raw passthrough for the Node server relay: returns the unmodified cloud
+  // rows so proxy mode ships exactly what direct mode reads from CloudFront —
+  // the client maps every row to the UI `Transaction` shape in account.ts.
+  async function getLedgerTransactions({ force = false } = {}) {
+    return fetchLedgerRows({ force });
+  }
+
+  // Mapped transaction feed for assistant/MCP consumers. Open orders surface as
+  // the "open" limit/stop rows in the history table; trades keep their
+  // originating order type ("limit" | "stop") when a limit/stop order filled.
+  async function getTransactions({ force = false } = {}) {
+    const rows = await fetchLedgerRows({ force });
+    return rows
       .map((r) => {
         if (r.table === "order") return orderToTransaction(r);
         return toTransaction(r);
       })
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .slice(0, 50);
-    transactionsAt = now();
-    return transactionsCache;
+      .sort((a, b) => b.timestamp - a.timestamp);
   }
 
   // Merge a mutation response with a freshly refreshed account summary so the
@@ -315,7 +298,7 @@ export function createAccountService({
     ]);
     quoteCache = quote;
     quoteAt = now();
-    summaryCache = toSummary(portfolio);
+    summaryCache = { account: portfolio.account };
     summaryAt = now();
     return summaryCache;
   }
@@ -326,6 +309,7 @@ export function createAccountService({
     getCachedQuote,
     getPortfolioSummary,
     getTransactions,
+    getLedgerTransactions,
     buy,
     sell,
     transfer,

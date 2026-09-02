@@ -15,7 +15,8 @@ function fakeDynamo(handlers = {}) {
     async send(command) {
       const handler = handlers[command.constructor.name];
       if (handler) return handler(command.input);
-      if (command.constructor.name === "GetItemCommand") return { Item: undefined };
+      if (command.constructor.name === "GetItemCommand")
+        return { Item: undefined };
       if (command.constructor.name === "ScanCommand") return { Items: [] };
       return {};
     },
@@ -26,21 +27,19 @@ test("memory store mirrors the old Map semantics", async () => {
   const store = createMemoryPendingStore();
   assert.equal(await store.size(), 0);
 
-  const created = await store.put({ tool: "buy_stock", arguments: { quantity: 12 } });
+  const created = await store.put({
+    tool: "buy_stock",
+    arguments: { quantity: 12 },
+  });
   assert.ok(created.confirmationId);
   assert.equal(await store.size(), 1);
 
   const got = await store.get(created.confirmationId);
   assert.equal(got.tool, "buy_stock");
   assert.deepEqual(got.arguments, { quantity: 12 });
-
-  const recent = await store.mostRecent();
-  assert.equal(recent.confirmationId, created.confirmationId);
-
   await store.remove(created.confirmationId);
   assert.equal(await store.get(created.confirmationId), null);
   assert.equal(await store.size(), 0);
-  assert.equal(await store.mostRecent(), null);
 });
 
 test("dynamo store put/get/remove round-trips", async () => {
@@ -68,7 +67,10 @@ test("dynamo store put/get/remove round-trips", async () => {
     now: () => 1787529600000,
   });
 
-  const created = await store.put({ tool: "buy_stock", arguments: { quantity: 12 } });
+  const created = await store.put({
+    tool: "buy_stock",
+    arguments: { quantity: 12 },
+  });
   assert.ok(created.confirmationId);
   assert.equal(created.ttl, 1787529600 + DEFAULT_TTL_SECONDS);
 
@@ -77,7 +79,6 @@ test("dynamo store put/get/remove round-trips", async () => {
   assert.deepEqual(got.arguments, { quantity: 12 });
 
   assert.equal(await store.size(), 1);
-  assert.equal((await store.mostRecent()).confirmationId, created.confirmationId);
 
   await store.remove(created.confirmationId);
   assert.equal(await store.get(created.confirmationId), null);
@@ -121,5 +122,5 @@ test("dynamo store defensively treats expired items as missing", async () => {
   nowMs += 61_000;
   assert.equal(await store.get(confirmationId), null);
   assert.equal(await store.size(), 0);
-  assert.equal(await store.mostRecent(), null);
+  assert.equal(await store.size(), 0);
 });

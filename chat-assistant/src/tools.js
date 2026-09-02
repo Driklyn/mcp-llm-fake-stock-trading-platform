@@ -33,7 +33,7 @@ const dollarAmount = (description) => ({
 const confirmFlag = {
   type: "boolean",
   description:
-    "Set to true only when the human user has explicitly confirmed a trade worth $1,000 or more.",
+    "Set to true only when the human user has explicitly confirmed the pending action (a trade worth $1,000 or more, or a cash transfer of $500 or more).",
 };
 
 export const TOOLS = [
@@ -103,6 +103,7 @@ export const TOOLS = [
           amount: dollarAmount(
             "Dollar amount to move. Positive deposits cash; negative withdraws cash.",
           ),
+          confirm: confirmFlag,
         },
         required: ["amount"],
       },

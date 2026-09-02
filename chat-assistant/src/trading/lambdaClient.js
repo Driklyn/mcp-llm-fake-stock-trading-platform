@@ -15,7 +15,7 @@
  *
  * Route ownership:
  *   trading-api      portfolio / orders / POST trades & transfers — event.routeKey
- *   trading-api      GET trades/50 + transfers/50 — event.rawPath drives the feed window
+ *   trading-api      GET /api/v1/transactions/50 (consolidated ledger feed) — event.routeKey
  *   ticks-fetcher    ticks/4h + ticks/latest — event.rawPath drives its window
  *
  * Mutations carry a fresh UUID `idempotencyKey` in the body so an ambiguous
