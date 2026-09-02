@@ -1,5 +1,5 @@
 import React from "react";
-import * as styles from "./topbar.css.ts";
+import * as styles from "./topBar.css.ts";
 
 export type TopBarProps = React.HTMLAttributes<HTMLElement> & {
   children?: React.ReactNode;
@@ -9,7 +9,7 @@ export type TopBarProps = React.HTMLAttributes<HTMLElement> & {
 export default function TopBar({ children, className, ...props }: TopBarProps) {
   return (
     <header
-      className={`${styles.topbar}${className ? " " + className : ""}`}
+      className={`${styles.topBar}${className ? " " + className : ""}`}
       {...props}
     >
       {children}
