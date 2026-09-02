@@ -44,10 +44,74 @@ const CREATE_PRICE_HISTORY = `
   )
 `;
 
-function clampInt(value, min, max, fallback) {
+export function clampInt(value, min, max, fallback) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(num)));
+}
+
+/**
+ * Build the DynamoDB Query input that reads the last `pointCount` realized tick
+ * points for `symbol` (newest-first) as of `nowSeconds` (epoch seconds).
+ *
+ * The sort-key column is `timestamp`, which is a DynamoDB RESERVED KEYWORD. It
+ * MUST be referenced through an ExpressionAttributeNames alias (`#ts`): using
+ * the bare name makes DynamoDB reject the request with a 400 ValidationException
+ * ("Attribute name is a reserved keyword").
+ */
+export function buildQueryInput({ tableName, symbol, nowSeconds, pointCount }) {
+  return {
+    TableName: tableName,
+    KeyConditionExpression: "symbol = :symbol AND #ts <= :now",
+    ExpressionAttributeNames: {
+      "#ts": "timestamp", // Safeguard the reserved keyword
+    },
+    ExpressionAttributeValues: {
+      ":symbol": { S: symbol },
+      ":now": { N: String(nowSeconds) },
+    },
+    ScanIndexForward: false,
+    Limit: pointCount,
+  };
+}
+
+/**
+ * Normalize raw DynamoDB items into { timestamp, price } points: silently drop
+ * any item missing a finite timestamp/price, then reverse DynamoDB's newest-first
+ * ordering so callers can insert oldest-first.
+ */
+export function parsePoints(items = []) {
+  return (items ?? [])
+    .map((item) => ({
+      timestamp: Number(item.timestamp?.N),
+      price: Number(item.price?.N),
+    }))
+    .filter(
+      (point) =>
+        Number.isFinite(point.timestamp) && Number.isFinite(point.price),
+    )
+    .reverse(); // oldest-first for the INSERT
+}
+
+/**
+ * Build one parameterized multi-row bulk INSERT statement (and its bind values)
+ * against Aurora DSQL. Points must already be normalized and oldest-first.
+ */
+export function buildBulkInsert({ symbol, points }) {
+  const values = [];
+  const valueGroups = [];
+  points.forEach((point, index) => {
+    const offset = index * 3;
+    valueGroups.push(`($${offset + 1}, $${offset + 2}, $${offset + 3})`);
+    values.push(symbol, point.timestamp, point.price);
+  });
+
+  return {
+    text: `INSERT INTO price_history (symbol, ts, price)
+       VALUES ${valueGroups.join(", ")}
+       ON CONFLICT (symbol, ts) DO NOTHING`,
+    values,
+  };
 }
 
 async function connectToDsql(region, endpoint) {
@@ -90,28 +154,12 @@ export async function handler(event = {}) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const ddb = new DynamoDBClient({ region });
   const queryResult = await ddb.send(
-    new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: "symbol = :symbol AND timestamp <= :now",
-      ExpressionAttributeValues: {
-        ":symbol": { S: symbol },
-        ":now": { N: String(nowSeconds) },
-      },
-      ScanIndexForward: false,
-      Limit: pointCount,
-    }),
+    new QueryCommand(
+      buildQueryInput({ tableName, symbol, nowSeconds, pointCount }),
+    ),
   );
 
-  const points = (queryResult.Items ?? [])
-    .map((item) => ({
-      timestamp: Number(item.timestamp?.N),
-      price: Number(item.price?.N),
-    }))
-    .filter(
-      (point) =>
-        Number.isFinite(point.timestamp) && Number.isFinite(point.price),
-    )
-    .reverse(); // oldest-first for the INSERT
+  const points = parsePoints(queryResult.Items);
 
   if (points.length === 0) {
     return { status: "no-data", symbol, synced: 0 };
@@ -122,20 +170,8 @@ export async function handler(event = {}) {
   try {
     await pool.query(CREATE_PRICE_HISTORY);
 
-    const bindParams = [];
-    const valueGroups = [];
-    points.forEach((point, index) => {
-      const offset = index * 3;
-      valueGroups.push(`($${offset + 1}, $${offset + 2}, $${offset + 3})`);
-      bindParams.push(symbol, point.timestamp, point.price);
-    });
-
-    const insertResult = await pool.query(
-      `INSERT INTO price_history (symbol, ts, price)
-       VALUES ${valueGroups.join(", ")}
-       ON CONFLICT (symbol, ts) DO NOTHING`,
-      bindParams,
-    );
+    const { text, values } = buildBulkInsert({ symbol, points });
+    const insertResult = await pool.query(text, values);
 
     const summary = {
       status: "ok",

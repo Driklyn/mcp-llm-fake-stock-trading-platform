@@ -8,6 +8,9 @@
   "engines": {
     "node": ">=22"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.1117.0",
     "@aws-sdk/dsql-signer": "^3.1117.0",

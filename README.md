@@ -1,9 +1,12 @@
 # MCP+LLM Fake Stock Trading Platform
 
-A full-stack fake stock trading demo. A Node.js server simulates a market and exposes
-it through a WebSocket live feed, an MCP tool layer, and an optional LLM-powered chat
-assistant. A Vite + React client renders the portfolio, an interactive canvas price
-chart, and a chat panel that can buy, sell, and manage orders in plain English.
+A full-stack fake stock trading platform. The account ledger and simulated market live in
+a serverless AWS stack, exposed over REST with an MCP tool layer and an LLM-powered chat
+assistant (optionally deterministic). A Vite + React client renders the portfolio, an
+interactive canvas price chart, and a chat panel that can buy, sell, and manage orders in
+plain English. The client is built to run as a static GitHub Pages site that polls the
+REST API directly; you can optionally run the included Node server, which adds a WebSocket
+live feed (in proxy mode) for local development.
 
 **NOTE:** This project was created by Kevin Jurkowski as a portfolio piece. It was created
 entirely using AI tooling (primarily Cline + DeepSeek, along with Google Gemini and the free
@@ -13,40 +16,42 @@ infrastructure](infra/README.md) was designed in such a way that it costs $0/mon
 ## Highlights
 
 - Simulated `FAKE` ticker with a bounded random-walk price that ticks every 15 seconds
-- Real-time market feed over WebSocket (`account`, `transactions`, and `tick` messages)
+- Live market feed — by default the static client polls the ticks REST API every 15s;
+  running the optional Node proxy adds a WebSocket stream (`account`, `transactions`, and `tick` messages)
 - Portfolio tracking: cash, holdings, cost basis, realized/unrealized gains, total equity
 - Market orders plus limit and stop orders that execute when the price crosses the trigger
-- Large-trade confirmation flow (10+ shares or $1,000+ value) across chat, WebSocket, and MCP
+- Large-trade confirmation flow (10+ shares or $1,000+ value) across chat, MCP, and
+  the WebSocket proxy when running the local dev server
 - MCP server (stdio + streamable HTTP) exposing 8 trading tools
 - Deterministic natural-language intent parser, optionally backed by a local Ollama
   model or an OpenAI-compatible LLM (e.g. OpenRouter free tier)
-- Account ledger held in Aurora DSQL by the serverless `infra/` stack (`trading-api`);
+- Account ledger held in Aurora DSQL by the serverless [`infra/`](infra/) stack (`trading-api`);
   the local server is a stateless proxy over it. The cloud `GET /api/v1/portfolio`
   endpoint is account-only — transactions come from the consolidated `GET /api/v1/transactions/50` ledger feed
 - Canvas-based price chart
-- A small Vanilla Extract design-system package (`ui`) shared with the client
+- A small Vanilla Extract design-system package ([`ui/`](ui/)) shared with the client
 
 ## Monorepo Layout
 
 This project is an npm workspaces monorepo:
 
-| Package          | Path              | Description                                                                                                                          |
-| ---------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `server`         | `server/`         | Express + WebSocket proxy over the deployed `trading-api` ledger, MCP layer, chat assistant route                                    |
-| `client`         | `client/`         | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)                                                      |
-| `ui`             | `ui/`             | Shared React component library and design tokens built with Vanilla Extract                                                          |
-| `chat-assistant` | `chat-assistant/` | Host-agnostic chat assistant (LLM planner, tool execution, pending confirmations) shared by the dev server and the production Lambda |
+| Package          | Path                                 | Description                                                                                                                              |
+| ---------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `server`         | [`server/`](server/)                 | Optional Express proxy over the deployed `trading-api` ledger (adds WebSocket live feed + MCP relay for local dev), chat assistant route |
+| `client`         | [`client/`](client/)                 | Vite + React 18 + TypeScript front end (portfolio, chart, chat, manual trading)                                                          |
+| `ui`             | [`ui/`](ui/)                         | Shared React component library and design tokens built with Vanilla Extract                                                              |
+| `chat-assistant` | [`chat-assistant/`](chat-assistant/) | Host-agnostic chat assistant (LLM planner, tool execution, pending confirmations) shared by the dev server and the production Lambda     |
 
 ## Local Development
 
 Prerequisites: Node.js with npm, plus a deployed instance of the serverless market
-stack (`infra/`) — the local server is a **stateless proxy** over
-`infra/lambdas/trading-api`. There is no local account state anymore.
+stack ([`infra/`](infra/)) — the local server is a **stateless proxy** over
+[`infra/lambdas/trading-api`](infra/lambdas/trading-api/). There is no local account state anymore.
 
 1. Install dependencies: `npm install`
 2. Deploy the infra stack and read the two base URLs from the Terraform
    outputs `trading_api_base_url` (API Gateway) and `trading_cdn_base_url`
-   (CloudFront) (see `infra/README.md`).
+   (CloudFront) (see [`infra/README.md`](infra/README.md)).
 3. Start the backend, pointing it at the deployed API:
 
    TRADING_API_BASE_URL=https://<api-gateway-domain> \
@@ -55,24 +60,24 @@ stack (`infra/`) — the local server is a **stateless proxy** over
 4. Start the front-end: `npm run dev`
 5. Open http://localhost:5173
 
-The server listens on port 3001 and serves the REST, WebSocket, and MCP HTTP
-endpoints. Every account read and mutation is delegated to trading-api. Account
-state is split into independently-queryable `GET /api/portfolio` (account
-summary) and `GET /api/transactions` (recent activity); the price feed comes
+When using this proxy, the server listens on port 3001 and serves the REST, MCP (HTTP),
+and WebSocket endpoints. Every account read and mutation is delegated to trading-api by
+this server. Account state is split into the independently-queryable `GET /api/portfolio`
+(account summary) and `GET /api/transactions` (recent activity); the price feed comes
 from `GET /api/v1/ticks/4h` (windowed history) and `GET /api/v1/ticks/latest`
 (current price). Quotes and summaries are cached for 15s.
 
 ### Scripts
 
-| Script                                 | Description                                          |
-| -------------------------------------- | ---------------------------------------------------- |
-| `npm run dev`                          | Start the Vite client dev server                     |
-| `npm run dev:server`                   | Start the market / WebSocket / API server            |
-| `npm run build`                        | Build the client for production                      |
-| `npm run build:assistant`              | Bundle the assistant Lambda into `assistant/dist`    |
-| `npm test`                             | Run server + chat-assistant + assistant Lambda tests |
-| `npm run mcp --workspace server`       | Run the MCP server over stdio                        |
-| `npm run typecheck --workspace client` | Type-check the client                                |
+| Script                                 | Description                                                   |
+| -------------------------------------- | ------------------------------------------------------------- |
+| `npm run dev`                          | Start the Vite client dev server                              |
+| `npm run dev:server`                   | Start the market proxy server (REST + optional WebSocket/MCP) |
+| `npm run build`                        | Build the client for production                               |
+| `npm run build:assistant`              | Bundle the assistant Lambda into `assistant/dist`             |
+| `npm test`                             | Run server + chat-assistant + assistant Lambda tests          |
+| `npm run mcp --workspace server`       | Run the MCP server over stdio                                 |
+| `npm run typecheck --workspace client` | Type-check the client                                         |
 
 ## Chat Assistant (Optional LLM)
 
@@ -83,7 +88,7 @@ plans are reconciled. Safety: the deterministic plan wins when the LLM flips a
 buy into a sell (or vice versa), turns a conditional order into a market order,
 or fabricates intent.
 
-One shared package (`chat-assistant/`) powers both hosts:
+One shared package ([`chat-assistant/`](chat-assistant/)) powers both hosts:
 
 - **Local dev** — `POST /api/assistant` on the Node server (port 3001), with a
   local Ollama endpoint. Model: `llama3.1:8b` by default; `OLLAMA_BASE_URL`
@@ -124,13 +129,13 @@ Or connect through the main server's streamable HTTP transport at `POST /mcp` (w
 - `list_orders` — list pending and completed orders
 - `cancel_order` — cancel an open order
 
-All tools share the same Aurora DSQL ledger as the WebSocket server, so actions
+All MCP tools share the same Aurora DSQL ledger as the REST paths, so actions
 taken through the chat panel, the manual trading panel, or MCP are reflected
 everywhere immediately.
 
 ## Design System (`ui`)
 
-The `ui` package is a small React component library built with Vanilla Extract
+The [`ui/`](ui/) package is a small React component library built with Vanilla Extract
 (`@vanilla-extract/css` + `@vanilla-extract/sprinkles`). It provides layout primitives
 (`AppShell`, `Layout`, `Panel`, `TopBar`), stats and tables, form inputs, chat
 components, a transaction history view, and design tokens (`space`, `radii`,
@@ -147,7 +152,7 @@ components, a transaction history view, and design tokens (`space`, `radii`,
 - Large-trade confirmation (10+ shares or $1,000+ value) before execution
 - Portfolio stats including invested vs. uninvested cash and gains/losses
 - Transaction history with status-aware, sortable rows
-- One shared ledger: every path (WebSocket, REST, MCP) writes through to Aurora DSQL
+- One shared ledger: every path (REST, MCP, and the optional WebSocket proxy) writes through to Aurora DSQL
 
 ## Deployment Notes
 
@@ -162,7 +167,7 @@ Lambdas).
     VITE_API_BASE_URL=https://<api-gateway-domain> npm run build
 
 The static output lands in `client/dist`. Host it anywhere — or push to GitHub
-and let `.github/workflows/deploy-pages.yml` build with the `CLOUDFRONT_URL` and
+and let [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml) build with the `CLOUDFRONT_URL` and
 `API_GATEWAY_URL` repository secrets and deploy automatically (enable Pages →
 "GitHub Actions" in
 the repo settings first).
@@ -190,7 +195,7 @@ Gateway) and `TRADING_CDN_BASE_URL` (CloudFront), run `npm run dev:server`, then
 ### AWS (free-tier-friendly)
 
 - The full ledger, price feed, trading API, and chat assistant live in the
-  serverless `infra/` stack (see `infra/README.md`): Aurora DSQL + DynamoDB
+  serverless [`infra/`](infra/) stack (see [`infra/README.md`](infra/README.md)): Aurora DSQL + DynamoDB
   (price history + pending confirmations) + API Gateway + CloudFront + 5
   Lambdas + EventBridge schedules + DynamoDB Streams, all inside the free tier.
 - Run the Node proxy server anywhere that can reach the API Gateway and

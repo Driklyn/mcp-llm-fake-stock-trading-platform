@@ -50,6 +50,54 @@ export function resolveWindow(event, nowSeconds) {
   return null;
 }
 
+/**
+ * Build the DynamoDB Query input reading realized ticks for `symbol` within
+ * `[from, to]`, newest-first and capped to `limit` rows.
+ *
+ * `to` is the callers "now" (epoch seconds) so every returned point satisfies
+ * `timestamp <= now`: anything the ticks-generator pre-populated for the future
+ * (the 0s/15s/30s/45s slots of the current minute) stays hidden until its time
+ * arrives.
+ *
+ * The sort-key column is `timestamp`, a DynamoDB RESERVED KEYWORD. It MUST be
+ * referenced through an ExpressionAttributeNames alias (`#ts`); a bare name
+ * makes DynamoDB reject the request with a 400 ValidationException.
+ */
+export function buildQueryInput({ tableName, symbol, from, to, limit }) {
+  return {
+    TableName: tableName,
+    KeyConditionExpression: "symbol = :symbol AND #ts BETWEEN :from AND :now",
+    ExpressionAttributeNames: {
+      "#ts": "timestamp", // Safeguard the reserved keyword
+    },
+    ExpressionAttributeValues: {
+      ":symbol": { S: symbol },
+      ":from": { N: String(from) },
+      ":now": { N: String(to) },
+    },
+    ScanIndexForward: false,
+    Limit: limit,
+  };
+}
+
+/**
+ * Normalize raw DynamoDB items into { timestamp, price } points: silently drop
+ * any item missing a finite timestamp/price, then reverse DynamoDB's newest-first
+ * ordering so callers serve oldest-first.
+ */
+export function parsePoints(items = []) {
+  return (items ?? [])
+    .map((item) => ({
+      timestamp: Number(item.timestamp?.N),
+      price: Number(item.price?.N),
+    }))
+    .filter(
+      (point) =>
+        Number.isFinite(point.timestamp) && Number.isFinite(point.price),
+    )
+    .reverse(); // DynamoDB returned newest-first; serve oldest-first
+}
+
 function apiResponse(statusCode, body) {
   return {
     statusCode,
@@ -105,32 +153,12 @@ export async function handler(event = {}) {
 
   const client = new DynamoDBClient({ region });
   const result = await client.send(
-    new QueryCommand({
-      TableName: tableName,
-      KeyConditionExpression: "symbol = :symbol AND #ts BETWEEN :from AND :now",
-      ExpressionAttributeNames: {
-        "#ts": "timestamp", // Safeguard the reserved keyword
-      },
-      ExpressionAttributeValues: {
-        ":symbol": { S: symbol },
-        ":from": { N: String(from) },
-        ":now": { N: String(nowSeconds) },
-      },
-      ScanIndexForward: false,
-      Limit: limit,
-    }),
+    new QueryCommand(
+      buildQueryInput({ tableName, symbol, from, to: nowSeconds, limit }),
+    ),
   );
 
-  const points = (result.Items ?? [])
-    .map((item) => ({
-      timestamp: Number(item.timestamp?.N),
-      price: Number(item.price?.N),
-    }))
-    .filter(
-      (point) =>
-        Number.isFinite(point.timestamp) && Number.isFinite(point.price),
-    )
-    .reverse(); // DynamoDB returned newest-first; serve oldest-first
+  const points = parsePoints(result.Items);
 
   return apiResponse(200, {
     symbol,

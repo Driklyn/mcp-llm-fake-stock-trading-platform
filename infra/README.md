@@ -26,13 +26,12 @@ flowchart TB
     CF -->|HTTPS| GW["HTTP API Gateway<br/>(versioned /api/v1 routes)"]
 
     GW -->|"GET /api/v1/ticks/4h · GET /api/v1/ticks/latest"| FETCHER["ticks-fetcher"]
-    GW -->|"POST /api/v1/ticks"| GENERATOR["ticks-generator"]
     GW -->|"POST /api/v1/trades · GET /api/v1/transactions/50 · GET /api/v1/portfolio · POST /api/v1/transfers · POST /api/v1/orders · GET /api/v1/orders · POST /api/v1/orders/{orderId}/cancel · POST /api/v1/orders/process"| TRADING["trading-api"]
     GW -->|"POST /api/v1/assistant"| ASSISTANT["assistant"]
     ASSISTANT -->|"LambdaClient.invoke (direct)"| TRADING
     ASSISTANT -->|"LambdaClient.invoke (direct)"| FETCHER
 
-    GENERATOR -->|BatchWriteItem| DDB["DynamoDB<br/>market_price_history<br/>(hot ticks, 24h TTL)"]
+    GENERATOR["ticks-generator"] -->|BatchWriteItem| DDB["DynamoDB<br/>market_price_history<br/>(hot ticks, 24h TTL)"]
     FETCHER -->|Query| DDB
     TRADING -->|Query| DDB
     TRADING <-->|"portfolio + trades + orders + transfers"| DSQL["Aurora DSQL<br/>market_db (ledger)"]

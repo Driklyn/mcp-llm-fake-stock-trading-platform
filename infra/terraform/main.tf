@@ -13,12 +13,12 @@
 #                   │
 #        ┌──────────┼───────────────┬──────────────┐
 #        ▼          ▼               ▼              ▼
-#  ticks-generator ticks-fetcher trading-api   assistant
-#        │          │               │              │
-#        │          ▼               ▼              ▼
-#        │    DynamoDB         Aurora DSQL  pending_confirmations
-#        │   (hot ticks)       (ledger)      (DynamoDB, TTL)
-#        └───────▶ hourly-sync-engine (DynamoDB → DSQL, hourly)
+#  ticks-fetcher trading-api   assistant   ticks-generator
+#        │          │               │              │        (EventBridge
+#        ▼          ▼               ▼      ───────▶ BatchWriteItem cron(* * * * ? *))
+#   DynamoDB   Aurora DSQL  pending_confirmations
+#  (hot ticks)  (ledger)    (DynamoDB, TTL)
+#       └──────▶ hourly-sync-engine (DynamoDB → DSQL, hourly)
 # ---------------------------------------------------------------------------
 
 locals {
@@ -597,14 +597,6 @@ resource "aws_apigatewayv2_stage" "market_api_default" {
 
 
 # --- Integrations (AWS_PROXY → Lambda, payload format 2.0) --------------------
-resource "aws_apigatewayv2_integration" "ticks_generator" {
-  api_id                 = aws_apigatewayv2_api.market_api.id
-  integration_type       = "AWS_PROXY"
-  integration_method     = "POST"
-  integration_uri        = aws_lambda_function.ticks_generator.invoke_arn
-  payload_format_version = "2.0"
-}
-
 resource "aws_apigatewayv2_integration" "ticks_fetcher" {
   api_id                 = aws_apigatewayv2_api.market_api.id
   integration_type       = "AWS_PROXY"
@@ -630,12 +622,6 @@ resource "aws_apigatewayv2_integration" "assistant" {
 }
 
 # --- Routes ----------------------------------------------------------------
-resource "aws_apigatewayv2_route" "ticks_generator_post" {
-  api_id    = aws_apigatewayv2_api.market_api.id
-  route_key = "POST /api/v1/ticks"
-  target    = "integrations/${aws_apigatewayv2_integration.ticks_generator.id}"
-}
-
 resource "aws_apigatewayv2_route" "ticks_fetcher_4h_get" {
   api_id    = aws_apigatewayv2_api.market_api.id
   route_key = "GET /api/v1/ticks/4h"
@@ -704,13 +690,6 @@ resource "aws_apigatewayv2_route" "assistant_post" {
 }
 
 # --- Let API Gateway invoke the Lambdas -------------------------------------
-resource "aws_lambda_permission" "ticks_generator_apigw" {
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.ticks_generator.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.market_api.execution_arn}/*/*"
-}
-
 resource "aws_lambda_permission" "ticks_fetcher_apigw" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.ticks_fetcher.function_name
@@ -796,9 +775,10 @@ resource "aws_cloudfront_cache_policy" "ledger_cache" {
   }
 }
 
-# No caching anywhere else: POST /api/v1/ticks, POST /api/v1/trades,
-# GET /api/v1/portfolio, POST /api/v1/transfers, and the order routes must
-# always reach the origin.
+# No caching anywhere else: POST /api/v1/trades, GET /api/v1/portfolio,
+# POST /api/v1/transfers, and the order routes must always reach the origin.
+# (ticks are generated solely by the EventBridge cron; there is no public
+# POST /api/v1/ticks route.)
 resource "aws_cloudfront_cache_policy" "no_cache" {
   name        = "market-no-cache-policy"
   comment     = "Disable caching for trade, portfolio, and POST routes"

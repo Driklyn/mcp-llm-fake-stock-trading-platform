@@ -1,9 +1,9 @@
 /**
  * ticks-generator — deterministic tick writer for the DynamoDB store layer.
  *
- * Two triggers:
- *   1. EventBridge schedule cron(* * * * ? *) — fires once per minute.
- *   2. POST /api/v1/ticks through the HTTP API Gateway (manual on-demand).
+ * Triggered by an EventBridge schedule cron(* * * * ? *) that fires once
+ * per minute. Ticks are produced ONLY by that schedule: the public
+ * POST /api/v1/ticks route was removed so nobody can write ticks on demand.
  *
  * Every invocation writes exactly four items — the four 15-second block
  * timestamps (0s, 15s, 30s, 45s) of the current UTC minute — in ONE
@@ -108,28 +108,15 @@ export function minuteSlotsForTime(timeSeconds) {
   return TICK_SLOTS_PER_MINUTE.map((offset) => minuteStart + offset);
 }
 
-function apiResponse(statusCode, body) {
-  return {
-    statusCode,
-    headers: {
-      "content-type": "application/json",
-      "access-control-allow-origin": "*",
-    },
-    body: JSON.stringify(body),
-  };
-}
-
-export async function handler(event = {}) {
-  const region = process.env.AWS_REGION ?? "us-east-1";
-  const tableName = process.env.MARKET_TABLE ?? DEFAULT_TABLE;
-  const symbol = process.env.MARKET_SYMBOL ?? DEFAULT_SYMBOL;
-  const params = resolveParams(process.env);
-  const ttlSeconds = finiteOr(process.env.TICK_TTL_SECONDS, 24 * 60 * 60);
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  const slots = minuteSlotsForTime(nowSeconds);
-
-  const items = slots.map((timestamp) => {
+/**
+ * Turn a set of 15-second slot timestamps into the DynamoDB BatchWriteItem
+ * `PutRequest` payloads (taken from the handler body). Price comes from the
+ * deterministic walk; each item's `ttl` is its timestamp plus `ttlSeconds` —
+ * deliberately NOT the raw timestamp, so freshly-written ticks are never
+ * instantly expired.
+ */
+export function buildWriteItems({ slots, params, symbol, ttlSeconds }) {
+  return slots.map((timestamp) => {
     const price = getPriceAtTime(timestamp, params);
     return {
       PutRequest: {
@@ -142,6 +129,19 @@ export async function handler(event = {}) {
       },
     };
   });
+}
+
+export async function handler(event = {}) {
+  const region = process.env.AWS_REGION ?? "us-east-1";
+  const tableName = process.env.MARKET_TABLE ?? DEFAULT_TABLE;
+  const symbol = process.env.MARKET_SYMBOL ?? DEFAULT_SYMBOL;
+  const params = resolveParams(process.env);
+  const ttlSeconds = finiteOr(process.env.TICK_TTL_SECONDS, 24 * 60 * 60);
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const slots = minuteSlotsForTime(nowSeconds);
+
+  const items = buildWriteItems({ slots, params, symbol, ttlSeconds });
 
   const client = new DynamoDBClient({ region });
   const result = await client.send(
@@ -167,10 +167,5 @@ export async function handler(event = {}) {
     console.warn("ticks-generator: unprocessed items:", unprocessed);
   }
   console.log("ticks-generator:", JSON.stringify(summary));
-
-  // API Gateway (payload format 2.0) requests get a real HTTP response.
-  if (event?.requestContext?.http) {
-    return apiResponse(200, summary);
-  }
   return summary;
 }
