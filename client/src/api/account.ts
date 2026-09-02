@@ -1,8 +1,8 @@
 /**
  * Maps the serverless cloud responses (`GET /api/v1/portfolio` + ticks, plus
- * the dedicated `/api/v1/trades/50` + `/api/v1/transfers/50` feeds for
- * transactions) into the exact shapes the React UI consumes. This is the client
- * mirror of `server/src/trading/account.js` (`toSummary` / `toTransaction`), so
+ * the dedicated `/api/v1/transactions/50` feed for transactions) into the exact
+ * shapes the React UI consumes. This is the client mirror of
+ * `server/src/trading/account.js` (`toSummary` / `toTransaction`), so
  * direct-mode and proxy-mode rendering stay identical.
  */
 

@@ -82,8 +82,16 @@ export function buildChartGeometry(
   points: ChartPoint[],
   width: number,
   height: number,
-  padding = { top: 16, right: 16, bottom: 28, left: 40 },
+  padding?: { top: number; right: number; bottom: number; left: number },
 ): ChartGeometry {
+  const resolvedPadding = {
+    top: Math.max(12, Math.min(18, height * 0.05)),
+    right: 16,
+    bottom: Math.max(16, Math.min(24, height * 0.12)),
+    left: Math.max(36, Math.min(48, width * 0.08)),
+    ...(padding ?? {}),
+  };
+
   const safePoints =
     Array.isArray(points) && points.length > 0
       ? points
@@ -105,9 +113,9 @@ export function buildChartGeometry(
   const maxValue = rawMaxValue + axisPadding;
   const domain = maxValue - minValue || 1;
   const yLabelWidth = 48;
-  const leftPadding = Math.max(padding.left, yLabelWidth + 16);
-  const usableWidth = width - leftPadding - padding.right;
-  const usableHeight = height - padding.top - padding.bottom;
+  const leftPadding = Math.max(resolvedPadding.left, yLabelWidth + 16);
+  const usableWidth = width - leftPadding - resolvedPadding.right;
+  const usableHeight = height - resolvedPadding.top - resolvedPadding.bottom;
 
   const plotLeft = leftPadding;
 
@@ -125,7 +133,7 @@ export function buildChartGeometry(
     const x = plotLeft + Math.min(Math.max(ratio, 0), 1) * usableWidth;
     const y =
       height -
-      padding.bottom -
+      resolvedPadding.bottom -
       ((Number(point.value) - minValue) / domain) * usableHeight;
 
     return {
@@ -145,7 +153,7 @@ export function buildChartGeometry(
   const yTicks = Array.from({ length: 5 }, (_, tickIndex) => {
     const ratio = tickIndex / 4;
     const value = maxValue - domain * ratio;
-    const y = padding.top + ratio * usableHeight;
+    const y = resolvedPadding.top + ratio * usableHeight;
     return { value, y };
   }).reverse();
 
@@ -191,6 +199,6 @@ export function buildChartGeometry(
     xTicks,
     usableWidth,
     usableHeight,
-    padding,
+    padding: resolvedPadding,
   };
 }

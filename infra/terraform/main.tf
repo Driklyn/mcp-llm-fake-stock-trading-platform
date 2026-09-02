@@ -6,7 +6,7 @@
 # file — every resource talks over AWS-managed public endpoints.
 #
 #   viewers ──▶ CloudFront (14s edge cache on GET /api/v1/ticks/* and the
-#               /api/v1/trades/50 + /api/v1/transfers/50 ledger feeds)
+#               /api/v1/transactions/50 ledger feed)
 #                   │
 #                   ▼
 #           HTTP API Gateway (versioned /api/v1 financial routes)
@@ -411,6 +411,7 @@ resource "aws_lambda_function" "trading_api" {
       MARKET_SYMBOL      = var.market_symbol
       MARKET_BASE_PRICE  = tostring(var.market_base_price)
       ACCOUNT_START_CASH = tostring(var.account_start_cash)
+      CF_SECRET_TOKEN    = var.cloudfront_custom_secret_token
     }
   }
 
@@ -659,9 +660,9 @@ resource "aws_apigatewayv2_route" "portfolio_get" {
   target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
 }
 
-resource "aws_apigatewayv2_route" "trades_get" {
+resource "aws_apigatewayv2_route" "transactions_get" {
   api_id    = aws_apigatewayv2_api.market_api.id
-  route_key = "GET /api/v1/trades/50"
+  route_key = "GET /api/v1/transactions/50"
   target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
 }
 
@@ -671,11 +672,6 @@ resource "aws_apigatewayv2_route" "transfers_post" {
   target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
 }
 
-resource "aws_apigatewayv2_route" "transfers_get" {
-  api_id    = aws_apigatewayv2_api.market_api.id
-  route_key = "GET /api/v1/transfers/50"
-  target    = "integrations/${aws_apigatewayv2_integration.trading_api.id}"
-}
 
 resource "aws_apigatewayv2_route" "orders_post" {
   api_id    = aws_apigatewayv2_api.market_api.id
@@ -770,13 +766,13 @@ resource "aws_cloudfront_cache_policy" "ticks_cache" {
   }
 }
 
-# 14-second edge TTL for the ledger read feeds. The window is fixed by the
-# route (/api/v1/trades/50, /api/v1/transfers/50) and the lambda ignores query
-# strings, so none are kept in the cache key — only the Origin header is kept so
+# 14-second edge TTL for the ledger read feed. The window is fixed by the
+# route (/api/v1/transactions/50) and the lambda ignores query strings, so
+# none are kept in the cache key — only the Origin header is kept so
 # CORS headers are never mixed across viewers.
 resource "aws_cloudfront_cache_policy" "ledger_cache" {
   name        = "market-ledger-cache-policy"
-  comment     = "14-second edge TTL for GET /api/v1/trades/50 and /api/v1/transfers/50"
+  comment     = "14-second edge TTL for GET /api/v1/transactions/50"
   min_ttl     = var.cloudfront_ledger_cache_ttl
   default_ttl = var.cloudfront_ledger_cache_ttl
   max_ttl     = var.cloudfront_ledger_cache_ttl
@@ -890,8 +886,9 @@ resource "aws_cloudfront_distribution" "market_edge" {
   }
 
   # Fixed-window ledger feeds: same 14s edge cache treatment as the ticks.
+
   ordered_cache_behavior {
-    path_pattern             = "/api/v1/trades/50"
+    path_pattern             = "/api/v1/transactions/50"
     target_origin_id         = "market-api-gateway"
     viewer_protocol_policy   = "redirect-to-https"
     allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
@@ -901,8 +898,11 @@ resource "aws_cloudfront_distribution" "market_edge" {
     compress                 = true
   }
 
+  # Ledger orders list: ensure CloudFront caches the orders endpoint for the
+  # same short 14s edge TTL and forwards the required headers so the origin
+  # can validate the injected secret header `X-From-CloudFront`.
   ordered_cache_behavior {
-    path_pattern             = "/api/v1/transfers/50"
+    path_pattern             = "/api/v1/orders"
     target_origin_id         = "market-api-gateway"
     viewer_protocol_policy   = "redirect-to-https"
     allowed_methods          = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]

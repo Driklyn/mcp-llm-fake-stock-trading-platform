@@ -34,13 +34,10 @@ import {
 import { assistantUrl, isDirectMode, wsUrl } from "./config";
 import {
   fetchLatestTick,
-  fetchOrders,
   fetchPortfolio,
   fetchPortfolioSummary,
   fetchTicks4h,
-  fetchTrades,
   fetchTransactions,
-  fetchTransfers,
   placeOrder as cloudPlaceOrder,
   postTrade,
   postTransfer,
@@ -175,26 +172,23 @@ function App() {
   // falls back to [] so the account still renders (mirrors proxy mode's
   // Promise.allSettled philosophy).
   const fetchDirectAccount = async (signal?: AbortSignal) => {
-    const [portfolio, trades, transfers, orders] = await Promise.all([
+    const [portfolio, transactionsResult] = await Promise.all([
       fetchPortfolio(signal),
-      fetchTrades(signal).catch(() => ({
-        ok: true,
-        trades: [] as CloudTrade[],
-      })),
-      fetchTransfers(signal).catch(() => ({
-        ok: true,
-        transfers: [] as CloudTransfer[],
-      })),
-      fetchOrders(signal).catch(() => ({
-        ok: true,
-        orders: [] as CloudOrder[],
-      })),
+      fetchTransactions(signal).catch(() => ({ ok: true, transactions: [] })),
     ]);
+
+    const rows = Array.isArray(transactionsResult.transactions)
+      ? transactionsResult.transactions
+      : [];
+    const trades = rows.filter((r) => r.table === "trade");
+    const transfers = rows.filter((r) => r.table === "transfer");
+    const orders = rows.filter((r) => r.table === "order");
+
     return {
       portfolio,
-      trades: trades.trades,
-      transfers: transfers.transfers,
-      orders: orders.orders,
+      trades,
+      transfers,
+      orders,
     };
   };
 

@@ -134,13 +134,9 @@ export function createLambdaTradingClient({
   return {
     fetchPortfolio: () =>
       invoke(tradingApiFunctionName, "GET /api/v1/portfolio"),
-    fetchTrades: () =>
-      invoke(tradingApiFunctionName, "GET /api/v1/trades/50", {
-        rawPath: "/api/v1/trades/50",
-      }),
-    fetchTransfers: () =>
-      invoke(tradingApiFunctionName, "GET /api/v1/transfers/50", {
-        rawPath: "/api/v1/transfers/50",
+    fetchTransactions: () =>
+      invoke(tradingApiFunctionName, "GET /api/v1/transactions/50", {
+        rawPath: "/api/v1/transactions/50",
       }),
     fetchTicks4h: () =>
       invoke(ticksFetcherFunctionName, "GET /api/v1/ticks/4h", {
@@ -150,10 +146,7 @@ export function createLambdaTradingClient({
       invoke(ticksFetcherFunctionName, "GET /api/v1/ticks/latest", {
         rawPath: "/api/v1/ticks/latest",
       }),
-    fetchOrders: (status) =>
-      invoke(tradingApiFunctionName, "GET /api/v1/orders", {
-        ...(status ? { queryStringParameters: { status } } : {}),
-      }),
+    fetchOrders: () => invoke(tradingApiFunctionName, "GET /api/v1/orders"),
     postTrade: ({ symbol, side, quantity }) =>
       invoke(tradingApiFunctionName, "POST /api/v1/trades", {
         body: { symbol, side, quantity },

@@ -5,18 +5,24 @@ import {
   applyFill,
   foldTradeLedger,
   orderTriggered,
-  resolveFeedWindow,
 } from "../index.mjs";
 
 /**
  * Minimal in-memory portfolio store that satisfies the handful of query shapes
  * applyFill issues (SELECT cash/position, DELETE zero positions, upsert rows).
  */
-function makeFakeClient({ cash = 10000, positionQty = 0, positionAvg = 0 } = {}) {
+function makeFakeClient({
+  cash = 10000,
+  positionQty = 0,
+  positionAvg = 0,
+} = {}) {
   const portfolio = new Map();
   portfolio.set("CASH", { quantity: cash, average_price: 1 });
   if (positionQty > 0) {
-    portfolio.set("FAKE", { quantity: positionQty, average_price: positionAvg });
+    portfolio.set("FAKE", {
+      quantity: positionQty,
+      average_price: positionAvg,
+    });
   }
   const client = {
     async query(sql, params = []) {
@@ -64,37 +70,43 @@ test("foldTradeLedger computes realized gains using average-cost accounting", ()
 });
 
 test("orderTriggered applies limit and stop rules", () => {
-  assert.equal(orderTriggered({ type: "limit", side: "BUY", price: 95 }, 94), true);
-  assert.equal(orderTriggered({ type: "limit", side: "BUY", price: 95 }, 96), false);
-  assert.equal(orderTriggered({ type: "limit", side: "SELL", price: 110 }, 111), true);
-  assert.equal(orderTriggered({ type: "limit", side: "SELL", price: 110 }, 109), false);
-  assert.equal(orderTriggered({ type: "stop", side: "BUY", price: 120 }, 120), true);
-  assert.equal(orderTriggered({ type: "stop", side: "BUY", price: 120 }, 119), false);
-  assert.equal(orderTriggered({ type: "stop", side: "SELL", price: 80 }, 79), true);
-  assert.equal(orderTriggered({ type: "stop", side: "SELL", price: 80 }, 81), false);
+  assert.equal(
+    orderTriggered({ type: "limit", side: "BUY", price: 95 }, 94),
+    true,
+  );
+  assert.equal(
+    orderTriggered({ type: "limit", side: "BUY", price: 95 }, 96),
+    false,
+  );
+  assert.equal(
+    orderTriggered({ type: "limit", side: "SELL", price: 110 }, 111),
+    true,
+  );
+  assert.equal(
+    orderTriggered({ type: "limit", side: "SELL", price: 110 }, 109),
+    false,
+  );
+  assert.equal(
+    orderTriggered({ type: "stop", side: "BUY", price: 120 }, 120),
+    true,
+  );
+  assert.equal(
+    orderTriggered({ type: "stop", side: "BUY", price: 120 }, 119),
+    false,
+  );
+  assert.equal(
+    orderTriggered({ type: "stop", side: "SELL", price: 80 }, 79),
+    true,
+  );
+  assert.equal(
+    orderTriggered({ type: "stop", side: "SELL", price: 80 }, 81),
+    false,
+  );
 });
 
-test("resolveFeedWindow maps the fixed /50 feed routes", () => {
-  assert.deepEqual(resolveFeedWindow({ rawPath: "/api/v1/trades/50" }), {
-    feed: "trades",
-    limit: 50,
-  });
-  assert.deepEqual(resolveFeedWindow({ rawPath: "/api/v1/transfers/50" }), {
-    feed: "transfers",
-    limit: 50,
-  });
-});
-
-test("resolveFeedWindow returns null for unknown, bare, or other-window routes", () => {
-  assert.equal(resolveFeedWindow({}), null);
-  assert.equal(resolveFeedWindow({ rawPath: "" }), null);
-  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/trades" }), null);
-  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/transfers" }), null);
-  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/trades/100" }), null);
-  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/transfers/100" }), null);
-  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/ticks/4h" }), null);
-  assert.equal(resolveFeedWindow({ rawPath: "/api/v1/portfolio" }), null);
-});
+// The fixed-window ledger feed is now consolidated into `/api/v1/transactions/50`.
+// Route-window resolution tests were removed as the feed window is no longer
+// resolved from individual `trades/50` or `transfers/50` routes.
 
 test("applyFill buys shares and reduces cash", async () => {
   const { client, portfolio } = makeFakeClient({ cash: 10000 });

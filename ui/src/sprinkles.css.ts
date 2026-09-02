@@ -9,6 +9,7 @@ export const space = {
   xl: 24,
   xxl: 32,
   xxxl: 48,
+  full: "100%",
 };
 
 export const radii = {

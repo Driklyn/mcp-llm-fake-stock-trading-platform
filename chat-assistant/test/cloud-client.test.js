@@ -7,8 +7,7 @@ import {
   fetchOrders,
   fetchPortfolio,
   fetchTicks4h,
-  fetchTrades,
-  fetchTransfers,
+  fetchTransactions,
   isCloudMode,
   postTrade,
   postTransfer,
@@ -99,7 +98,7 @@ test("postTrade sends the trade payload with a fresh idempotencyKey", async () =
   }
 });
 
-test("fetchOrders passes through the status query parameter", async () => {
+test("fetchOrders requests the orders endpoint without status query", async () => {
   const requests = [];
   const { server, baseUrl } = await startFakeApi((req, res) => {
     requests.push(req.url);
@@ -107,8 +106,8 @@ test("fetchOrders passes through the status query parameter", async () => {
     res.end(JSON.stringify({ ok: true, orders: [] }));
   });
   try {
-    await withEnv(baseUrl, baseUrl, () => fetchOrders("open"));
-    assert.deepEqual(requests, ["/api/v1/orders?status=open"]);
+    await withEnv(baseUrl, baseUrl, () => fetchOrders());
+    assert.deepEqual(requests, ["/api/v1/orders"]);
   } finally {
     server.close();
   }
@@ -167,17 +166,11 @@ test("ticks and ledger feeds route through TRADING_CDN_BASE_URL", async () => {
     await withEnv("http://127.0.0.1:1", baseUrl, async () => {
       await fetchLatestTick();
       await fetchTicks4h();
-      await fetchTrades();
-      await fetchTransfers();
+      await fetchTransactions();
     });
     assert.deepEqual(
       requests.map((r) => r.url),
-      [
-        "/api/v1/ticks/latest",
-        "/api/v1/ticks/4h",
-        "/api/v1/trades/50",
-        "/api/v1/transfers/50",
-      ],
+      ["/api/v1/ticks/latest", "/api/v1/ticks/4h", "/api/v1/transactions/50"],
     );
   } finally {
     server.close();

@@ -5,11 +5,11 @@ export const grid = style({
   display: "grid",
   gap: space.md,
   marginBottom: space.xl,
-  gridTemplateColumns: "repeat(5, minmax(120px, 1fr))",
+  gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
 
   "@media": {
-    "(max-width: 760px)": {
-      gridTemplateColumns: "repeat(2, minmax(120px, 1fr))",
+    "(max-width: 1023px)": {
+      gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
     },
   },
 });

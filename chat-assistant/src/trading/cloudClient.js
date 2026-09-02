@@ -9,10 +9,9 @@
  *   (portfolio, orders, POST trades/transfers/orders). Bypassing CloudFront on
  *   dynamic routes keeps mutations away from the edge layer entirely.
  * - TRADING_CDN_BASE_URL → CloudFront base for the cached read feeds
- *   (GET /api/v1/ticks/*, /api/v1/trades/50, /api/v1/transfers/50). The
- *   ticks-fetcher Lambda only serves HTTP traffic that arrived via CloudFront
- *   (X-From-CloudFront guard), and the 14s edge cache shields the 1-RCU
- *   DynamoDB table and the DSQL ledger.
+ *   (GET /api/v1/ticks/*, /api/v1/transactions/50). The ticks-fetcher Lambda
+ *   only serves HTTP traffic that arrived via CloudFront (X-From-CloudFront guard),
+ *   and the 14s edge cache shields the 1-RCU DynamoDB table and the DSQL ledger.
  *
  * Mutations carry a fresh UUID `idempotencyKey` so an ambiguous timeout can be
  * retried safely — trading-api replays the stored result for a duplicate key
@@ -109,10 +108,10 @@ export const fetchPortfolio = async () =>
     "/api/v1/portfolio",
   );
 
-export const fetchOrders = async (status) =>
+export const fetchOrders = async () =>
   request(
     baseUrlOrThrow(getTradingApiBaseUrl(), "TRADING_API_BASE_URL"),
-    `/api/v1/orders${status ? `?status=${encodeURIComponent(status)}` : ""}`,
+    "/api/v1/orders",
   );
 
 export const postTrade = async ({ symbol, side, quantity }) =>
@@ -169,14 +168,8 @@ export const fetchLatestTick = async () =>
     "/api/v1/ticks/latest",
   );
 
-export const fetchTrades = async () =>
+export const fetchTransactions = async () =>
   request(
     baseUrlOrThrow(getTradingCdnBaseUrl(), "TRADING_CDN_BASE_URL"),
-    "/api/v1/trades/50",
-  );
-
-export const fetchTransfers = async () =>
-  request(
-    baseUrlOrThrow(getTradingCdnBaseUrl(), "TRADING_CDN_BASE_URL"),
-    "/api/v1/transfers/50",
+    "/api/v1/transactions/50",
   );

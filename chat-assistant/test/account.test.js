@@ -42,11 +42,20 @@ function stubClient(overrides = {}) {
         ],
       };
     },
-    async fetchTrades() {
-      return { ok: true, trades: [...portfolio.recentTrades] };
-    },
-    async fetchTransfers() {
-      return { ok: true, transfers: [...portfolio.recentTransfers] };
+    async fetchTransactions() {
+      const trades = portfolio.recentTrades.map((t) => ({
+        table: "trade",
+        ...t,
+      }));
+      const transfers = portfolio.recentTransfers.map((t) => ({
+        table: "transfer",
+        ...t,
+      }));
+      const orders = portfolio.openOrders.map((o) => ({
+        table: "order",
+        ...o,
+      }));
+      return { ok: true, transactions: [...trades, ...transfers, ...orders] };
     },
     async postTrade({ side, quantity }) {
       const fillPrice = 100;

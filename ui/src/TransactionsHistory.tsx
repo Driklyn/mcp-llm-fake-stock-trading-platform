@@ -124,9 +124,7 @@ function matchesType(
   entry: Transaction,
   types: Set<Transaction["kind"]>,
 ): boolean {
-  return [...types].some(
-    (type) => entry.kind === type || entry.side === type,
-  );
+  return [...types].some((type) => entry.kind === type || entry.side === type);
 }
 
 function parsePriceInput(value: string): number | null {
@@ -350,88 +348,91 @@ export default function TransactionsHistory({
         </div>
       </div>
 
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("time")}
-            >
-              Time {sortIndicator("time")}
-            </TableHeaderCell>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("type")}
-            >
-              Type {sortIndicator("type")}
-            </TableHeaderCell>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("side")}
-            >
-              Side {sortIndicator("side")}
-            </TableHeaderCell>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("quantity")}
-            >
-              Quantity {sortIndicator("quantity")}
-            </TableHeaderCell>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("price")}
-            >
-              Price {sortIndicator("price")}
-            </TableHeaderCell>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("amount")}
-            >
-              Amount {sortIndicator("amount")}
-            </TableHeaderCell>
-            <TableHeaderCell
-              className={sortableHeader}
-              onClick={() => handleSort("status")}
-            >
-              Status {sortIndicator("status")}
-            </TableHeaderCell>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sortedTransactions.length === 0 ? (
+      <div className={styles.tableWrapper}>
+        <Table className={styles.tableWrapper}>
+          <TableHeader>
             <TableRow>
-              <TableEmpty colSpan={7}>
-                No transactions match the current filters.
-              </TableEmpty>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("time")}
+              >
+                Time {sortIndicator("time")}
+              </TableHeaderCell>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("type")}
+              >
+                Type {sortIndicator("type")}
+              </TableHeaderCell>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("side")}
+              >
+                Side {sortIndicator("side")}
+              </TableHeaderCell>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("quantity")}
+              >
+                Quantity {sortIndicator("quantity")}
+              </TableHeaderCell>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("price")}
+              >
+                Price {sortIndicator("price")}
+              </TableHeaderCell>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("amount")}
+              >
+                Amount {sortIndicator("amount")}
+              </TableHeaderCell>
+              <TableHeaderCell
+                className={sortableHeader}
+                onClick={() => handleSort("status")}
+              >
+                Status {sortIndicator("status")}
+              </TableHeaderCell>
             </TableRow>
-          ) : (
-            sortedTransactions.map((entry) => {
-              const isWithdrawal = entry.kind === "withdrawal";
-              const isSell = entry.kind === "sell" || entry.side === "sell";
-              const showNegative = isWithdrawal || isSell;
-              const amountClass = showNegative
-                ? styles.negative
-                : styles.positive;
+          </TableHeader>
+          <TableBody>
+            {sortedTransactions.length === 0 ? (
+              <TableRow>
+                <TableEmpty colSpan={7}>
+                  No transactions match the current filters.
+                </TableEmpty>
+              </TableRow>
+            ) : (
+              sortedTransactions.map((entry, index) => {
+                const isWithdrawal = entry.kind === "withdrawal";
+                const isSell = entry.kind === "sell" || entry.side === "sell";
+                const showNegative = isWithdrawal || isSell;
+                const amountClass = showNegative
+                  ? styles.negative
+                  : styles.positive;
+                const rowKey = `${entry.id ?? "row"}-${entry.kind}-${entry.timestamp}-${index}`;
 
-              return (
-                <TableRow key={entry.id}>
-                  <TableCell>{formatTime(entry.timestamp)}</TableCell>
-                  <TableCell>{entry.kind}</TableCell>
-                  <TableCell>{entry.side ?? "—"}</TableCell>
-                  <TableCell>{formatQuantity(entry.quantity)}</TableCell>
-                  <TableCell>{formatPrice(entry.price)}</TableCell>
-                  <TableCell className={amountClass}>
-                    {formatAmount(entry.amount)}
-                  </TableCell>
-                  <TableCell className={statusClass(entry.status)}>
-                    {STATUS_LABELS[entry.status] ?? entry.status}
-                  </TableCell>
-                </TableRow>
-              );
-            })
-          )}
-        </TableBody>
-      </Table>
+                return (
+                  <TableRow key={rowKey}>
+                    <TableCell>{formatTime(entry.timestamp)}</TableCell>
+                    <TableCell>{entry.kind}</TableCell>
+                    <TableCell>{entry.side ?? "—"}</TableCell>
+                    <TableCell>{formatQuantity(entry.quantity)}</TableCell>
+                    <TableCell>{formatPrice(entry.price)}</TableCell>
+                    <TableCell className={amountClass}>
+                      {formatAmount(entry.amount)}
+                    </TableCell>
+                    <TableCell className={statusClass(entry.status)}>
+                      {STATUS_LABELS[entry.status] ?? entry.status}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
     </section>
   );
 }

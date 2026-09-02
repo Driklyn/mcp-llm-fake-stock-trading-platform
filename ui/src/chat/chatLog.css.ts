@@ -7,6 +7,8 @@ export const chatLog = style({
   gap: space.sm,
   paddingRight: space.xs,
   marginBottom: space.lg,
-  maxHeight: 360,
+  flex: 1,
+  minHeight: space.none,
+  height: space.full,
   overflowY: "auto",
 });

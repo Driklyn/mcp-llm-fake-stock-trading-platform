@@ -17,10 +17,14 @@ export const layout = style({
   alignItems: "stretch",
   gridTemplateColumns: "2fr 1fr",
   minHeight: 560,
+  height: "calc(100vh - 150px)",
+  maxHeight: "calc(100vh - 150px)",
 
   "@media": {
-    "(max-width: 760px)": {
+    "(max-width: 1023px)": {
       gridTemplateColumns: "1fr",
+      height: "auto",
+      maxHeight: "none",
     },
   },
 });

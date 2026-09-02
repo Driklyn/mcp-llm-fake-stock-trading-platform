@@ -8,7 +8,7 @@ export const input = style({
   paddingRight: space.lg,
   paddingTop: space.sm,
   paddingBottom: space.sm,
-  width: "100%",
+  width: space.full,
   background: "rgba(10, 19, 27, 0.9)",
   border: "1px solid rgba(149, 170, 200, 0.2)",
   color: "#ecf4ff",

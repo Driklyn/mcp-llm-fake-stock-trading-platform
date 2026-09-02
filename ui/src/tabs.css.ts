@@ -4,7 +4,9 @@ import { radii, space } from "./sprinkles.css.ts";
 export const root = style({
   display: "flex",
   flexDirection: "column",
-  minHeight: 0,
+  flex: 1,
+  minHeight: space.none,
+  height: space.full,
 });
 
 export const tabList = style({
@@ -50,8 +52,12 @@ export const active = style({
 });
 
 export const tabContent = style({
-  minHeight: 0,
-  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  flex: 1,
+  minHeight: space.none,
+  height: space.full,
+  overflow: "hidden",
 });
 
 export const hidden = style({

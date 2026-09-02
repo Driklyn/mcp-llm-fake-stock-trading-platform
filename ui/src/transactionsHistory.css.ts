@@ -26,6 +26,7 @@ export const filterGroup = style({
   display: "flex",
   alignItems: "center",
   gap: space.xs,
+  flexWrap: "wrap",
 });
 
 export const filterLabel = style({
@@ -61,6 +62,7 @@ export const chipActive = style({
 export const priceInputs = style({
   display: "flex",
   alignItems: "center",
+  flexWrap: "wrap",
   gap: space.xs,
 });
 
@@ -79,6 +81,10 @@ export const priceInput = style({
     outline: "none",
     borderColor: "rgba(76, 186, 242, 0.7)",
   },
+});
+
+export const tableWrapper = style({
+  overflowX: "auto",
 });
 
 export const positive = style({

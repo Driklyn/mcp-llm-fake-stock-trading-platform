@@ -4,13 +4,13 @@
  * directly — no Node proxy server required.
  *
  * Dual-endpoint routing: GET /api/v1/ticks/* plus the fixed-window ledger
- * feeds GET /api/v1/trades/50 and GET /api/v1/transfers/50 go through the
- * CloudFront edge (cdnBaseUrl — the 14s cache shields the 1-RCU DynamoDB table
- * and the DSQL ledger), while every dynamic route (portfolio, orders, POST
- * trades/transfers) hits the HTTP API Gateway directly (apiBaseUrl) to fix
- * CORS and enable zero-buffered LLM streaming. The tick paths are
- * mode-dependent: direct mode keeps the deployed /api/v1/ticks/* routes,
- * proxy mode uses the Node server's non-versioned /api/ticks/* passthrough.
+ * feed GET /api/v1/transactions/50 go through the CloudFront edge
+ * (cdnBaseUrl — the 14s cache shields the 1-RCU DynamoDB table and the DSQL
+ * ledger), while every dynamic route (portfolio, orders, POST trades/transfers)
+ * hits the HTTP API Gateway directly (apiBaseUrl) to fix CORS and enable
+ * zero-buffered LLM streaming. The tick paths are mode-dependent: direct mode
+ * keeps the deployed /api/v1/ticks/* routes, proxy mode uses the Node server's
+ * non-versioned /api/ticks/* passthrough.
  *
  * CORS is already configured end-to-end: API Gateway allows `*` origins and
  * both Lambdas return `Access-Control-Allow-Origin: *`.
@@ -152,37 +152,16 @@ export type CloudOrdersResponse = {
 // Direct mode only (proxy mode uses fetchTransactions against the Node server
 // instead). The fixed-window /50 feeds are served through the CloudFront edge
 // (cdnBaseUrl) with the 14s ledger cache — same routing as the ticks reads.
-export async function fetchTrades(
-  signal?: AbortSignal,
-): Promise<CloudTradesResponse> {
-  return request<CloudTradesResponse>(cdnBaseUrl, "/api/v1/trades/50", {
-    signal,
-  });
-}
-
-export async function fetchTransfers(
-  signal?: AbortSignal,
-): Promise<CloudTransfersResponse> {
-  return request<CloudTransfersResponse>(cdnBaseUrl, "/api/v1/transfers/50", {
-    signal,
-  });
-}
 
 export async function fetchOrders(
   signal?: AbortSignal,
 ): Promise<CloudOrdersResponse> {
   // The orders list is a dynamic route on the API Gateway base (like the rest
   // of the orders API) — only the /50 ledger feeds are CloudFront-cached.
-  return request<CloudOrdersResponse>(
-    apiBaseUrl,
-    "/api/v1/orders?status=open",
-    { signal },
-  );
+  return request<CloudOrdersResponse>(apiBaseUrl, "/api/v1/orders", { signal });
 }
 
-export async function fetchTicks4h(
-  signal?: AbortSignal,
-): Promise<CloudTicks> {
+export async function fetchTicks4h(signal?: AbortSignal): Promise<CloudTicks> {
   return request<CloudTicks>(
     cdnBaseUrl,
     isDirectMode ? "/api/v1/ticks/4h" : "/api/ticks/4h",
@@ -212,6 +191,15 @@ export async function fetchPortfolioSummary(
 export async function fetchTransactions(
   signal?: AbortSignal,
 ): Promise<TransactionsResponse> {
+  // In direct (cdn) mode use the cached CDN ledger feed; in proxy mode
+  // the Node server exposes `/api/transactions`.
+  if (isDirectMode) {
+    return request<TransactionsResponse>(
+      cdnBaseUrl,
+      "/api/v1/transactions/50",
+      { signal },
+    );
+  }
   return request<TransactionsResponse>(apiBaseUrl, "/api/transactions", {
     signal,
   });

@@ -2,7 +2,7 @@ import { style } from "@vanilla-extract/css";
 import { space } from "./sprinkles.css.ts";
 
 export const table = style({
-  width: "100%",
+  width: space.full,
   borderCollapse: "collapse",
   fontSize: 14,
   color: "#dfeafc",

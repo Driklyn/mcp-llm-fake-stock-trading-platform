@@ -7,12 +7,12 @@ export const chatForm = style({
   gridTemplateColumns: "1fr auto",
 
   "@media": {
-    "(max-width: 760px)": {
+    "(max-width: 1023px)": {
       gridTemplateColumns: "1fr",
     },
   },
 });
 
 globalStyle(`${chatForm} input`, {
-  marginTop: 0,
+  marginTop: space.none,
 });

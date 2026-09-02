@@ -88,36 +88,35 @@ test("ticks functions invoke ticks-fetcher with rawPath windows", async () => {
   });
 });
 
-test("fetchTrades resolves the fixed /50 window; fetchOrders passes query parameters", async () => {
+test("transactions feed resolves the fixed /50 window; fetchOrders invokes orders without status", async () => {
   const { invokes, client } = makeClient(() => ({
     Payload: apiPayload(200, { ok: true, orders: [], trades: [] }),
   }));
 
-  await client.fetchTrades();
-  await client.fetchOrders("open");
+  await client.fetchTransactions();
+  await client.fetchOrders();
 
   assert.deepEqual(JSON.parse(invokes[0].Payload), {
-    routeKey: "GET /api/v1/trades/50",
-    rawPath: "/api/v1/trades/50",
+    routeKey: "GET /api/v1/transactions/50",
+    rawPath: "/api/v1/transactions/50",
     isBase64Encoded: false,
   });
   assert.deepEqual(JSON.parse(invokes[1].Payload), {
     routeKey: "GET /api/v1/orders",
-    queryStringParameters: { status: "open" },
     isBase64Encoded: false,
   });
 });
 
-test("fetchTransfers resolves the fixed /50 window", async () => {
+test("transactions feed resolves the fixed /50 window (use fetchTransactions)", async () => {
   const { invokes, client } = makeClient(() => ({
     Payload: apiPayload(200, { ok: true, transfers: [] }),
   }));
 
-  await client.fetchTransfers();
+  await client.fetchTransactions();
 
   assert.deepEqual(JSON.parse(invokes[0].Payload), {
-    routeKey: "GET /api/v1/transfers/50",
-    rawPath: "/api/v1/transfers/50",
+    routeKey: "GET /api/v1/transactions/50",
+    rawPath: "/api/v1/transactions/50",
     isBase64Encoded: false,
   });
 });

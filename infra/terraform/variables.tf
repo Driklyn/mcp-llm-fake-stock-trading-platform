@@ -83,7 +83,7 @@ variable "cloudfront_ticks_cache_ttl" {
 }
 
 variable "cloudfront_ledger_cache_ttl" {
-  description = "Edge cache TTL (seconds) for GET /api/v1/trades/50 and GET /api/v1/transfers/50."
+  description = "Edge cache TTL (seconds) for the consolidated GET /api/v1/transactions/50 ledger feed."
   type        = number
   default     = 14
 }

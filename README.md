@@ -22,9 +22,8 @@ infrastructure](infra/README.md) was designed in such a way that it costs $0/mon
   model or an OpenAI-compatible LLM (e.g. OpenRouter free tier)
 - Account ledger held in Aurora DSQL by the serverless `infra/` stack (`trading-api`);
   the local server is a stateless proxy over it. The cloud `GET /api/v1/portfolio`
-  endpoint is account-only — transactions come from the dedicated `GET /api/v1/trades`
-  and `GET /api/v1/transfers` endpoints
-- Canvas-based price chart with chart-data processing in a Web Worker
+  endpoint is account-only — transactions come from the consolidated `GET /api/v1/transactions/50` ledger feed
+- Canvas-based price chart
 - A small Vanilla Extract design-system package (`ui`) shared with the client
 
 ## Monorepo Layout

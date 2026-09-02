@@ -6,11 +6,11 @@
  *                                            basis, realized gains, equity, invested
  *                                            value, cash transferred)
  *   POST /api/v1/trades                      execute a market BUY/SELL against the ledger
- *   GET  /api/v1/trades/50                  recent trade history (fixed 50-row window, query strings ignored)
+ *   GET  /api/v1/transactions/50             recent combined ledger activity (trades, transfers, open orders) (fixed 50-row window, query strings ignored)
  *   POST /api/v1/transfers                   deposit (+) or withdraw (-) cash
- *   GET  /api/v1/transfers/50               recent transfer history (fixed 50-row window, query strings ignored)
+ *   POST /api/v1/transfers                   deposit (+) or withdraw (-) cash
  *   POST /api/v1/orders                      place a LIMIT/STOP order
- *   GET  /api/v1/orders                      list orders (?status=open)
+ *   GET  /api/v1/orders                      list orders (open only; CloudFront-only)
  *   POST /api/v1/orders/{orderId}/cancel     cancel an open order
  *   POST /api/v1/orders/process              evaluate open orders against the live price
  *                                            (manual fallback; fills are DynamoDB stream-driven)
@@ -446,22 +446,6 @@ async function executeTrade(pool, region, body) {
   }
 }
 
-/**
- * Resolve the ledger read-feed window from the request path. Unknown routes
- * return null (the handler answers 404). Query-string params are deliberately
- * ignored — the window is fixed at 50 rows.
- */
-export function resolveFeedWindow(event) {
-  const rawPath = event?.rawPath ?? "";
-  if (rawPath === "/api/v1/trades/50") {
-    return { feed: "trades", limit: 50 };
-  }
-  if (rawPath === "/api/v1/transfers/50") {
-    return { feed: "transfers", limit: 50 };
-  }
-  return null;
-}
-
 async function getTrades(pool, limit) {
   const { rows } = await pool.query(
     `SELECT id, symbol, side, quantity, price, created_at
@@ -479,6 +463,22 @@ async function getTransfers(pool, limit) {
     [limit],
   );
   return { ok: true, transfers: rows };
+}
+
+async function getTransactions(pool, limit) {
+  const { rows } = await pool.query(
+    `SELECT "table", id, symbol, side, type, quantity, price, amount, created_at FROM (
+       SELECT 'trade'::text AS "table", id, symbol, side, type, quantity, price, NULL::double precision AS amount, created_at FROM trades
+       UNION ALL
+       SELECT 'transfer'::text AS "table", id, NULL::text AS symbol, NULL::text AS side, NULL::text AS type, NULL::double precision AS quantity, NULL::double precision AS price, amount, created_at FROM transfers
+       UNION ALL
+       SELECT 'order'::text AS "table", id, symbol, side, type, quantity, price, NULL::double precision AS amount, created_at FROM orders WHERE status = 'open'
+     ) t
+     ORDER BY created_at DESC
+     LIMIT $1`,
+    [limit],
+  );
+  return { ok: true, transactions: rows };
 }
 
 async function postTransfer(pool, body) {
@@ -622,16 +622,11 @@ async function placeOrder(pool, body) {
 }
 
 async function getOrders(pool, status) {
-  const { rows } = status
-    ? await pool.query(
-        `SELECT id, symbol, side, type, quantity, price, status, created_at, executed_at, fill_price
-         FROM orders WHERE status = $1 ORDER BY id DESC LIMIT 100`,
-        [status],
-      )
-    : await pool.query(
-        `SELECT id, symbol, side, type, quantity, price, status, created_at, executed_at, fill_price
-         FROM orders ORDER BY id DESC LIMIT 100`,
-      );
+  const { rows } = await pool.query(
+    `SELECT id, symbol, side, type, quantity, price, status, created_at, executed_at, fill_price
+     FROM orders WHERE status = 'open' ORDER BY created_at DESC LIMIT $1`,
+    [50],
+  );
   return { ok: true, orders: rows };
 }
 
@@ -886,25 +881,17 @@ export async function handler(event = {}) {
         await executeTrade(pool, region, parseBody(event)),
       );
     }
-    if (routeKey === "GET /api/v1/trades/50") {
-      const window = resolveFeedWindow(event);
-      if (!window) {
-        return apiResponse(404, {
-          ok: false,
-          error: `Unknown trades route: ${event?.rawPath ?? "(no path)"}`,
-        });
-      }
-      return apiResponse(200, await getTrades(pool, window.limit));
-    }
-    if (routeKey === "GET /api/v1/transfers/50") {
-      const window = resolveFeedWindow(event);
-      if (!window) {
-        return apiResponse(404, {
-          ok: false,
-          error: `Unknown transfers route: ${event?.rawPath ?? "(no path)"}`,
-        });
-      }
-      return apiResponse(200, await getTransfers(pool, window.limit));
+
+    if (routeKey === "GET /api/v1/transactions/50") {
+      return {
+        statusCode: 200,
+        headers: {
+          "content-type": "application/json",
+          "access-control-allow-origin": "*",
+          "cache-control": "public, max-age=14",
+        },
+        body: JSON.stringify(await getTransactions(pool, 50)),
+      };
     }
     if (routeKey === "POST /api/v1/transfers") {
       return apiResponse(200, await postTransfer(pool, parseBody(event)));
@@ -913,10 +900,26 @@ export async function handler(event = {}) {
       return apiResponse(200, await placeOrder(pool, parseBody(event)));
     }
     if (routeKey === "GET /api/v1/orders") {
-      return apiResponse(
-        200,
-        await getOrders(pool, event?.queryStringParameters?.status),
-      );
+      // For HTTP requests through API Gateway require that CloudFront set the
+      // shared secret header. Lambda-invoked internal calls (no HTTP context)
+      // are allowed to bypass this check.
+      const isHttp = Boolean(event?.requestContext?.http);
+      if (isHttp) {
+        const header =
+          (event?.headers?.["x-from-cloudfront"] ??
+            event?.headers?.["X-From-CloudFront"]) ||
+          "";
+        if (
+          !process.env.CF_SECRET_TOKEN ||
+          header !== process.env.CF_SECRET_TOKEN
+        ) {
+          return apiResponse(403, {
+            ok: false,
+            error: "Forbidden: orders feed only available via CloudFront.",
+          });
+        }
+      }
+      return apiResponse(200, await getOrders(pool));
     }
     if (routeKey === "POST /api/v1/orders/{orderId}/cancel") {
       return apiResponse(

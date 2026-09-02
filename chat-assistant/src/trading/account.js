@@ -190,25 +190,13 @@ export function createAccountService({
     if (!force && transactionsCache && now() - transactionsAt < CACHE_TTL_MS) {
       return transactionsCache;
     }
-    const [tradesResult, transfersResult, ordersResult] = await Promise.all([
-      client.fetchTrades(),
-      client.fetchTransfers(),
-      client.fetchOrders("open"),
-    ]);
-    const trades = Array.isArray(tradesResult?.trades)
-      ? tradesResult.trades
-      : [];
-    const transfers = Array.isArray(transfersResult?.transfers)
-      ? transfersResult.transfers
-      : [];
-    const orders = Array.isArray(ordersResult?.orders)
-      ? ordersResult.orders
-      : [];
-    transactionsCache = [
-      ...trades.map(toTransaction),
-      ...transfers.map(toTransaction),
-      ...orders.map(orderToTransaction),
-    ]
+    const result = await client.fetchTransactions();
+    const rows = Array.isArray(result?.transactions) ? result.transactions : [];
+    transactionsCache = rows
+      .map((r) => {
+        if (r.table === "order") return orderToTransaction(r);
+        return toTransaction(r);
+      })
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, 50);
     transactionsAt = now();
@@ -304,8 +292,8 @@ export function createAccountService({
     return toClientOrder(result.order);
   }
 
-  async function listOrders({ status } = {}) {
-    const result = await client.fetchOrders(status);
+  async function listOrders() {
+    const result = await client.fetchOrders();
     return {
       orders: (Array.isArray(result?.orders) ? result.orders : []).map(
         toClientOrder,
