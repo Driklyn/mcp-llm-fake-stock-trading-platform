@@ -281,7 +281,7 @@ variable "tags" {
   description = "Common resource tags."
   type        = map(string)
   default = {
-    Project    = "mcp-llm-fake-stock-trader"
+    Project    = "mcp-llm-fake-stock-trading-platform"
     ManagedBy  = "terraform"
     CostCenter = "free-tier"
   }

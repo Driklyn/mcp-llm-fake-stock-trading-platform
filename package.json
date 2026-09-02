@@ -1,5 +1,5 @@
 {
-  "name": "mcp-llm-fake-stock-trader",
+  "name": "mcp-llm-fake-stock-trading-platform",
   "private": true,
   "version": "1.0.0",
   "workspaces": [
