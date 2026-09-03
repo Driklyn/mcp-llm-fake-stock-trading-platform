@@ -48,17 +48,17 @@ Prerequisites: Node.js with npm, plus a deployed instance of the serverless mark
 stack ([`infra/`](infra/)) — the local server is a **stateless proxy** over
 [`infra/lambdas/trading-api`](infra/lambdas/trading-api/). There is no local account state anymore.
 
-1. Install dependencies: `npm install`
-2. Deploy the infra stack and read the two base URLs from the Terraform
-   outputs `trading_api_base_url` (API Gateway) and `trading_cdn_base_url`
-   (CloudFront) (see [`infra/README.md`](infra/README.md)).
-3. Start the backend, pointing it at the deployed API:
+1.  Install dependencies: `npm install`
+2.  Deploy the infra stack and read the two base URLs from the Terraform
+    outputs `trading_api_base_url` (API Gateway) and `trading_cdn_base_url`
+    (CloudFront) (see [`infra/README.md`](infra/README.md)).
+3.  Start the backend, pointing it at the deployed API:
 
-   TRADING_API_BASE_URL=https://<api-gateway-domain> \
-   TRADING_CDN_BASE_URL=https://<cloudfront-domain> npm run dev:server
+        TRADING_API_BASE_URL=https://<api-gateway-domain> \
+        TRADING_CDN_BASE_URL=https://<cloudfront-domain> npm run dev:server
 
-4. Start the front-end: `npm run dev`
-5. Open http://localhost:5173
+4.  Start the front-end: `npm run dev`
+5.  Open http://localhost:5173
 
 When using this proxy, the server listens on port 3001 and serves the REST, MCP (HTTP),
 and WebSocket endpoints. Every account read and mutation is delegated to trading-api by
@@ -135,11 +135,13 @@ everywhere immediately.
 
 ## Design System (`ui`)
 
-The [`ui/`](ui/) package is a small React component library built with Vanilla Extract
-(`@vanilla-extract/css` + `@vanilla-extract/sprinkles`). It provides layout primitives
-(`AppShell`, `Layout`, `Panel`, `TopBar`), stats and tables, form inputs, chat
-components, a transaction history view, and design tokens (`space`, `radii`,
-`sprinkles`).
+The [`ui/`](ui/) package is a small React (TypeScript) design-system library
+built with Vanilla Extract and shared by the client. It exposes a numeric
+spacing/radii token scale plus an atomic `sprinkles` utility layer, along
+with reusable layout, stats/table, chart, form, and chat components.
+
+See [`ui/README.md`](ui/README.md) for the full documentation (design tokens,
+component inventory, and styling conventions).
 
 ## Core Behaviors
 

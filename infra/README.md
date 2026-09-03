@@ -73,18 +73,18 @@ flowchart TB
 
 2.  Configure AWS credentials and initialize Terraform:
 
-    cd infra/terraform
-    terraform init
+        cd infra/terraform
+        terraform init
 
 3.  Validate and preview:
 
-    terraform validate
-    terraform fmt -check
-    terraform plan
+        terraform validate
+        terraform fmt -check
+        terraform plan
 
 4.  Apply:
 
-    terraform apply
+        terraform apply
 
 ## API Reference (via CloudFront)
 

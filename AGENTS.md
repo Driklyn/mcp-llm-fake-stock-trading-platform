@@ -2,6 +2,7 @@
 
 - Don't try to build the client/server after changes.
 - When refactoring, don't worry about keeping backwards compatibility. This is a portfolio project, so there's no need to preserve any original functionality/state.
+- Always capitalize the first letter of each word in headings/buttons (Title Case), including README files.
 
 ### TypeScript
 
