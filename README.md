@@ -20,9 +20,12 @@ infrastructure](infra/README.md) was designed in such a way that it costs $0/mon
   running the optional Node proxy adds a WebSocket stream (`account`, `transactions`, and `tick` messages)
 - Portfolio tracking: cash, holdings, cost basis, realized/unrealized gains, total equity
 - Market orders plus limit and stop orders that execute when the price crosses the trigger
-- Large-trade confirmation flow (10+ shares or $1,000+ value) across chat, MCP, and
-  the WebSocket proxy when running the local dev server
-- MCP server (stdio + streamable HTTP) exposing 8 trading tools
+- Confirmation gates shared by chat, MCP, and the WebSocket proxy when running the
+  local dev server: large trades (10+ shares or $1,000+ value) and cash transfers of
+  $500+
+- MCP server (stdio + streamable HTTP) exposing 9 trading tools, sharing the
+  assistant's tool schemas and confirmation gate, with elicitation for inline
+  human confirmation on capable clients
 - Deterministic natural-language intent parser, optionally backed by a local Ollama
   model or an OpenAI-compatible LLM (e.g. OpenRouter free tier)
 - Account ledger held in Aurora DSQL by the serverless [`infra/`](infra/) stack (`trading-api`);
@@ -76,7 +79,7 @@ from `GET /api/v1/ticks/4h` (windowed history) and `GET /api/v1/ticks/latest`
 | `npm run build`                        | Build the client for production                               |
 | `npm run build:assistant`              | Bundle the assistant Lambda into `assistant/dist`             |
 | `npm test`                             | Run server + chat-assistant + assistant Lambda tests          |
-| `npm run mcp --workspace server`       | Run the MCP server over stdio                                 |
+| `npm run mcp --workspace server`       | Run the MCP server over stdio (read-only tools work offline)  |
 | `npm run typecheck --workspace client` | Type-check the client                                         |
 
 ## Chat Assistant (Optional LLM)
@@ -102,9 +105,10 @@ One shared package ([`chat-assistant/`](chat-assistant/)) powers both hosts:
 
 Supported intents: portfolio snapshots, price quotes, buying/selling shares (by
 quantity or dollar amount), limit and stop orders, cash deposits/withdrawals,
-and listing or canceling orders. Large trades ($1,000+) and cash transfers
-($500+) return a confirmation prompt in the chat UI (stored in-memory in dev,
-in DynamoDB in production).
+and listing or canceling orders. Trades of 10+ shares or $1,000+ value and cash
+transfers of $500+ return a confirmation prompt in the chat UI (stored in-memory
+in dev, in DynamoDB in production). The same helpers gate the MCP server (see
+[Confirmation Safeguards](#confirmation-safeguards)) and the WebSocket proxy.
 
 ## MCP Server
 
@@ -122,16 +126,106 @@ Or connect through the main server's streamable HTTP transport at `POST /mcp` (w
 
 - `get_portfolio_summary` — cash, invested (cost basis), gains/losses, holdings, total equity
 - `get_quote` — current `FAKE` price and recent history
-- `buy_stock` — market buy of `FAKE` shares
-- `sell_stock` — market sell of `FAKE` shares
+- `buy_stock` — market buy of `FAKE` shares by `quantity`, or by `amount` in dollars
+- `sell_stock` — market sell of `FAKE` shares by `quantity`, or by `amount` in dollars
 - `transfer_cash` — deposit or withdraw fake cash
 - `place_order` — place a limit or stop buy/sell order
-- `list_orders` — list pending and completed orders
-- `cancel_order` — cancel an open order
+- `list_orders` — list open orders, optionally filtered by type and side
+- `cancel_order` — cancel an open order (defaults to the pending order)
+- `resolve_confirmation` — confirm or cancel an action that required human confirmation
+
+The argument surface is derived from the same `TOOL_DEFINITIONS` registry the chat
+assistant uses ([`chat-assistant/src/tools.js`](chat-assistant/src/tools.js)), so the
+MCP schemas cannot drift from the assistant's. `buy_stock`/`sell_stock` accept either
+`quantity` or a dollar `amount`, which is converted to whole shares at the live price
+(rounded down); an amount that rounds down to zero whole shares returns a structured
+error instead of trading.
+
+`list_orders` returns **open orders only**, honoring the optional `type`
+(`limit`/`stop`) and `side` (`buy`/`sell`) filters — matching the chat assistant. A
+filled order is no longer listed.
 
 All MCP tools share the same Aurora DSQL ledger as the REST paths, so actions
 taken through the chat panel, the manual trading panel, or MCP are reflected
 everywhere immediately.
+
+### Confirmation Safeguards
+
+Every surface gates the same actions, through the same shared helpers
+(`requiresConfirmationForTradeValue`, `requiresConfirmationForTransferValue` in
+[`chat-assistant`](chat-assistant/src/chat.js)):
+
+| Action                  | Confirmation Required When                |
+| ----------------------- | ----------------------------------------- |
+| Market buy/sell         | `quantity >= 10` **or** value `>= $1,000` |
+| Limit/stop order        | `quantity >= 10` **or** value `>= $1,000` |
+| Cash deposit/withdrawal | absolute value `>= $500` (either sign)    |
+
+`chat`, the WebSocket proxy in `server/src/server.js`, and MCP therefore gate
+identically. A gated call always returns `requiresConfirmation: true` with a
+human-readable `message` in `structuredContent`, and repeating the call with
+`confirm: true` executes it.
+
+**Pending confirmations.** Gated calls write the pending action to the same pending
+store the chat assistant uses — selected the same way by every host, through
+`createPendingStore()` in [`chat-assistant`](chat-assistant/src/pending/index.js):
+DynamoDB (TTL-expiring, see the `assistant` Lambda) where
+`PENDING_CONFIRMATIONS_TABLE` is configured, an in-memory store otherwise, so the
+stdio bootstrap and local dev never reach for AWS. The store is created once per
+process in `server/src/server.js` and shared by the chat route and the MCP
+transport, so a confirmation minted by one resolves on the other. The gated call
+returns a `confirmationId` in `structuredContent`. Pass that ID back to
+`resolve_confirmation`:
+
+```
+resolve_confirmation({ confirmationId: "<id from the previous call>", action: "confirm" })
+resolve_confirmation({ confirmationId: "<id from the previous call>", action: "cancel" })
+```
+
+`confirm` re-executes the stored action with `confirm: true` and returns the
+execution result; `cancel` discards it without executing. The re-execution replays
+the stored arguments through the originating tool's own handler, so an MCP
+confirmation takes the identical execution path as the original call. An unknown or
+expired ID returns a "no pending action with that confirmationId" result. The ID is
+echoed by the client, exactly as the web client does — whether an LLM host actually
+passes it back is host behavior the protocol cannot enforce, which is why the
+`confirm: true` argument remains supported.
+
+**Elicitation (capable clients).** When the MCP client advertises
+`capabilities.elicitation.form`, a gated call asks the user inline with an
+`elicitation/create` request, so the confirmation happens while the tool call is
+still open — no ID round-trip is needed and **no pending entry is written**. The
+prompt is a form with a single boolean `confirm` field (a checkbox/toggle, the
+closest rendering to a confirm button — an `enum` would render as a dropdown); the
+`message` carries the quantity, side, price and total value. Only `accept` with
+`confirm: true` executes:
+
+| Result                      | Behaviour                                                                 |
+| --------------------------- | ------------------------------------------------------------------------- |
+| `accept` + `confirm: true`  | Executes the action and returns the service result                        |
+| `decline`                   | Returns `{ resolved: "declined" }`; does not execute                      |
+| `cancel`                    | Returns `{ resolved: "cancelled" }`; does not execute                     |
+| `accept` + `confirm: false` | Not consent: falls back to the structured payload with a `confirmationId` |
+
+`decline` and `cancel` are reported distinctly because the protocol distinguishes
+"the human said no" from "the prompt was dismissed". Elicitation is capability
+checked **before** the request is sent (`getClientCapabilities()?.elicitation?.form`),
+so a client without it is never prompted.
+
+**`confirm: true` fallback (headless clients).** Elicitation is a server→client
+request, so it needs a bidirectional session: it works over stdio, and over the
+Streamable HTTP transport in `server/src/server.js` only while the session is live.
+Clients that do not advertise the capability (headless clients included) receive the
+structured `{ requiresConfirmation: true, confirmationId, action details, message }`
+payload instead. They then call the tool again with `confirm: true`, or resolve the
+prompt with `resolve_confirmation`. The explicit flag always wins and is checked
+first.
+
+**`place_order` type correction.** A trigger price can make the requested order type
+semantically impossible — a `stop buy` below the market price would fill instantly.
+Rather than rejecting it, the server places the only workable type (`limit buy` in
+that example) and reports the change in a `warning` field of `structuredContent`
+(plus a sentence in the text content). The chat assistant reports the same warning.
 
 ## Design System (`ui`)
 
@@ -151,7 +245,8 @@ component inventory, and styling conventions).
 - Cash transfers in and out (DSQL `transfers` ledger)
 - Market buys and sells (by share count or dollar amount) executed by trading-api
 - Limit and stop orders that trading-api fills reactively against the live price whenever a new tick arrives
-- Large-trade confirmation (10+ shares or $1,000+ value) before execution
+- Confirmation before execution: trades of 10+ shares or $1,000+ value, and cash
+  transfers of $500+
 - Portfolio stats including invested vs. uninvested cash and gains/losses
 - Transaction history with status-aware, sortable rows
 - One shared ledger: every path (REST, MCP, and the optional WebSocket proxy) writes through to Aurora DSQL

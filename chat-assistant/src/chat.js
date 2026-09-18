@@ -10,7 +10,12 @@
  */
 
 import { getAssistantResponse, normalizeTradeQuantity } from "./llm.js";
-import { TOOL_NAMES, TOOLS } from "./tools.js";
+import {
+  filterOpenOrders,
+  resolveMarketTradeQuantity,
+  TOOL_NAMES,
+  TOOLS,
+} from "./tools.js";
 
 export function requiresConfirmationForTradeValue(quantity, price) {
   const qty = Number(quantity);
@@ -20,6 +25,56 @@ export function requiresConfirmationForTradeValue(quantity, price) {
     qty > 0 &&
     (qty >= 10 || (Number.isFinite(tradeValue) && tradeValue >= 1000))
   );
+}
+
+/**
+ * Cash deposits/withdrawals of $500 or more require a human confirmation.
+ * The sign is ignored, so both a deposit and a withdrawal of $500 gate.
+ */
+export function requiresConfirmationForTransferValue(amount) {
+  const value = Number(amount);
+  return Number.isFinite(value) && Math.abs(value) >= 500;
+}
+
+/**
+ * Infer the only order type that is semantically possible for a trigger price.
+ *
+ * A buy trigger at or below the market price is a `limit` (buy when the price
+ * falls to the trigger); above it, a `stop` (buy when the price rises to it).
+ * Mirror for sells. Returns `corrected: true` when the caller's requested type
+ * was overridden, so hosts can warn instead of silently rewriting the plan.
+ */
+export function inferOrderType({
+  requestedType,
+  side,
+  triggerPrice,
+  currentPrice,
+} = {}) {
+  const requested =
+    requestedType ?? (side === "sell" ? "stop" : "limit");
+  const trigger = Number(triggerPrice);
+  const current = Number(currentPrice ?? 0);
+
+  if (!Number.isFinite(trigger) || trigger <= 0) {
+    return { type: requested, requestedType: requested, corrected: false };
+  }
+
+  let inferred = requested;
+  if (side === "buy") {
+    // A buy trigger at or below the market price must be a limit, otherwise it
+    // would fill instantly as a market order.
+    inferred = trigger <= current ? "limit" : "stop";
+  } else if (side === "sell") {
+    // A sell trigger at or above the market price must be a limit, otherwise it
+    // would fill instantly at the standing price.
+    inferred = trigger >= current ? "limit" : "stop";
+  }
+
+  return {
+    type: inferred,
+    requestedType: requested,
+    corrected: inferred !== requested,
+  };
 }
 
 export function createAssistant({ account, pendingStore, llm = {} } = {}) {
@@ -70,8 +125,13 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
     }
 
     if (tool === TOOL_NAMES.buyStock) {
-      let quantity = normalizeTradeQuantity(plan.arguments?.quantity);
-      const amount = Number(plan.arguments?.amount ?? 0);
+      const resolved = resolveMarketTradeQuantity({
+        quantity: plan.arguments?.quantity,
+        amount: plan.arguments?.amount,
+        pricePerShare,
+      });
+      let { quantity } = resolved;
+      const { amount } = resolved;
       const confirmed = plan.arguments?.confirm === true;
 
       if (!quantity) {
@@ -84,19 +144,16 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
         };
       }
 
-      // If the assistant supplied a dollar `amount`, compute whole-share quantity using the live price
-      if (amount > 0) {
-        const computed = Math.floor(amount / Number(pricePerShare ?? 0));
-        if (computed <= 0) {
-          return {
-            plan,
-            payload: {
-              error: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
-            },
-            text: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
-          };
-        }
-        quantity = computed;
+      // A dollar amount that rounds down to zero whole shares never reaches the
+      // service; the caller is told to increase it or specify a quantity.
+      if (resolved.fromAmount && quantity <= 0) {
+        return {
+          plan,
+          payload: {
+            error: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
+          },
+          text: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would buy 0 whole shares. Increase the amount or say 'buy 1 share' to proceed.`,
+        };
       }
 
       const tradeValue = quantity * pricePerShare;
@@ -163,8 +220,13 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
     }
 
     if (tool === TOOL_NAMES.sellStock) {
-      let quantity = normalizeTradeQuantity(plan.arguments?.quantity);
-      const amount = Number(plan.arguments?.amount ?? 0);
+      const resolved = resolveMarketTradeQuantity({
+        quantity: plan.arguments?.quantity,
+        amount: plan.arguments?.amount,
+        pricePerShare,
+      });
+      let { quantity } = resolved;
+      const { amount } = resolved;
       const confirmed = plan.arguments?.confirm === true;
 
       if (!quantity) {
@@ -177,18 +239,16 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
         };
       }
 
-      if (amount > 0) {
-        const computed = Math.floor(amount / Number(pricePerShare ?? 0));
-        if (computed <= 0) {
-          return {
-            plan,
-            payload: {
-              error: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
-            },
-            text: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
-          };
-        }
-        quantity = computed;
+      // A dollar amount that rounds down to zero whole shares never reaches the
+      // service; the caller is told to increase it or specify a quantity.
+      if (resolved.fromAmount && quantity <= 0) {
+        return {
+          plan,
+          payload: {
+            error: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
+          },
+          text: `At the current price of $${Number(pricePerShare ?? 0).toFixed(2)}, $${amount.toFixed(2)} would sell 0 whole shares. Increase the amount or specify a quantity to proceed.`,
+        };
       }
 
       const tradeValue = quantity * pricePerShare;
@@ -260,7 +320,7 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
 
       // Deposits/withdrawals of $500+ require a human confirmation before the
       // cash is moved (mirrors the large-trade gate above).
-      if (!confirmed && Number.isFinite(amount) && Math.abs(amount) >= 500) {
+      if (!confirmed && requiresConfirmationForTransferValue(amount)) {
         const { confirmationId: id } = await pendingStore.put({
           tool,
           arguments: { ...(plan.arguments ?? {}) },
@@ -299,31 +359,28 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
     }
 
     if (tool === TOOL_NAMES.placeOrder) {
-      let orderType = String(plan.arguments?.type ?? "limit").toLowerCase();
+      const requestedType = String(plan.arguments?.type ?? "limit").toLowerCase();
       const orderSide = String(plan.arguments?.side ?? "buy").toLowerCase();
       const quantity = normalizeTradeQuantity(plan.arguments?.quantity);
       const triggerPrice = Number(plan.arguments?.price ?? 0);
       const confirmed = plan.arguments?.confirm === true;
 
-      // Normalize type based on semantics: a buy trigger below current price
-      // is a limit order (buy when price <= trigger). A buy trigger above
-      // current price is a stop (buy when price >= trigger). Mirror logic
-      // for sells. This corrects LLM plans that accidentally choose the
-      // opposite type.
-      if (Number.isFinite(triggerPrice) && triggerPrice > 0) {
-        const current = Number(pricePerShare ?? 0);
-        let inferred = orderType; // default to provided
-        if (orderSide === "buy") {
-          // If trigger is less than or equal to current, force Limit to avoid instant market execution
-          inferred = triggerPrice <= current ? "limit" : "stop";
-        } else if (orderSide === "sell") {
-          // If trigger is greater than or equal to current, force Limit to lock in that exact price or better
-          inferred = triggerPrice >= current ? "limit" : "stop";
-        }
-        if (inferred !== orderType) {
-          orderType = inferred;
-        }
-      }
+      // Normalize the type based on semantics: a buy trigger below the current
+      // price is a limit order (buy when price <= trigger); above it is a stop.
+      // Mirror for sells. The correction is reported as a warning rather than
+      // applied silently, so the caller always knows the plan changed.
+      const {
+        type: orderType,
+        corrected: typeCorrected,
+      } = inferOrderType({
+        requestedType,
+        side: orderSide,
+        triggerPrice,
+        currentPrice: pricePerShare,
+      });
+      const warning = typeCorrected
+        ? `Your ${requestedType} ${orderSide} at $${triggerPrice.toFixed(2)} was placed as a ${orderType} ${orderSide}, since a ${requestedType} ${orderSide} trigger at that price would have filled instantly at the current market price of $${Number(pricePerShare ?? 0).toFixed(2)}.`
+        : null;
 
       if (!quantity) {
         return {
@@ -348,17 +405,19 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
           tool,
           arguments: { ...(plan.arguments ?? {}) },
         });
+        const pendingMessage = `This ${orderType} ${orderSide} order is worth $${tradeValue.toFixed(2)} at the current price. Please confirm before placing it.`;
         return {
           plan,
           payload: {
             requiresConfirmation: true,
             confirmationId: id,
-            message: `This ${orderType} ${orderSide} order is worth $${tradeValue.toFixed(2)} at the current price. Please confirm before placing it.`,
+            message: pendingMessage,
             quantity,
             value: tradeValue,
             pricePerShare: Number(pricePerShare ?? 0),
+            ...(warning ? { warning } : {}),
           },
-          text: `This ${orderType} ${orderSide} order is worth $${tradeValue.toFixed(2)} at the current price. Please confirm before placing it.`,
+          text: warning ? `${warning} ${pendingMessage}` : pendingMessage,
         };
       }
 
@@ -369,10 +428,14 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
           quantity,
           price: triggerPrice,
         });
+        const executedText = `${orderType} ${orderSide} order placed for ${result.quantity} shares at $${Number(result.price ?? 0).toFixed(2)}.`;
         return {
           plan,
-          payload: result,
-          text: `${orderType} ${orderSide} order placed for ${result.quantity} shares at $${Number(result.price ?? 0).toFixed(2)}.`,
+          payload: {
+            ...result,
+            ...(warning ? { warning } : {}),
+          },
+          text: warning ? `${executedText} ${warning}` : executedText,
         };
       } catch (error) {
         return {
@@ -384,14 +447,11 @@ export function createAssistant({ account, pendingStore, llm = {} } = {}) {
     }
 
     if (tool === TOOL_NAMES.listOrders) {
-      const filterType = String(plan.arguments?.type ?? "").toLowerCase();
-      const filterSide = String(plan.arguments?.side ?? "").toLowerCase();
-      const orders = (await account.listOrders()).orders.filter(
-        (order) =>
-          order.status === "open" &&
-          (!filterType || order.type === filterType) &&
-          (!filterSide || order.kind === filterSide),
-      );
+      const result = await account.listOrders();
+      const orders = filterOpenOrders(result?.orders, {
+        type: plan.arguments?.type,
+        side: plan.arguments?.side,
+      });
       return {
         plan,
         payload: { orders },

@@ -1,0 +1,13 @@
+{
+  "servers": {
+    "fake-stock-trading": {
+      "type": "stdio",
+      "command": "npm",
+      "args": ["run", "mcp", "--silent", "--workspace", "server"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "NODE_NO_WARNINGS": "1"
+      }
+    }
+  }
+}

@@ -7,7 +7,12 @@
  * proxy is never duplicated between hosts.
  */
 
-export { createAssistant, requiresConfirmationForTradeValue } from "./chat.js";
+export {
+  createAssistant,
+  inferOrderType,
+  requiresConfirmationForTradeValue,
+  requiresConfirmationForTransferValue,
+} from "./chat.js";
 export {
   buildTradePlan,
   getAssistantResponse,
@@ -15,6 +20,15 @@ export {
   parseToolPlan,
   requiresConfirmationForTrade,
 } from "./llm.js";
+export {
+  filterOpenOrders,
+  resolveMarketTradeQuantity,
+  TOOL_DEFINITIONS,
+  TOOL_NAMES,
+  TOOL_SCHEMAS,
+  TOOLS,
+  toZodShape,
+} from "./tools.js";
 export {
   account,
   createAccountService,
@@ -24,5 +38,6 @@ export {
 } from "./trading/account.js";
 export * from "./trading/cloudClient.js";
 export { createLambdaTradingClient } from "./trading/lambdaClient.js";
+export { createPendingStore } from "./pending/index.js";
 export { createMemoryPendingStore } from "./pending/memory.js";
 export { createDynamoPendingStore } from "./pending/dynamodb.js";

@@ -7,7 +7,7 @@ import { createTradingMcpServer } from "./mcp/index.js";
 import {
   account,
   createAssistant,
-  createMemoryPendingStore,
+  createPendingStore,
   fetchTicks4h,
   fetchLatestTick,
   getTradingApiBaseUrl,
@@ -29,7 +29,11 @@ if (!isCloudMode()) {
 }
 
 await account.init();
-const pendingStore = createMemoryPendingStore();
+// One pending-confirmation store per process, shared by the chat assistant and
+// the MCP transport, so a confirmation minted by either surface resolves on
+// either: DynamoDB where PENDING_CONFIRMATIONS_TABLE is configured, in-memory
+// otherwise.
+const { store: pendingStore } = createPendingStore();
 const assistant = createAssistant({
   account,
   pendingStore,
@@ -130,7 +134,7 @@ app.post("/mcp", async (req, res) => {
           transports.set(newSessionId, transport);
         },
       });
-      const serverInstance = createTradingMcpServer();
+      const serverInstance = createTradingMcpServer({ pendingStore });
       await serverInstance.connect(transport);
       transport.onclose = () => {
         if (transport.sessionId) {

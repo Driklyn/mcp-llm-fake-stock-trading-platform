@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createMemoryPendingStore } from "../src/pending/memory.js";
+import { createPendingStore } from "../src/pending/index.js";
 import {
   createDynamoPendingStore,
   DEFAULT_TTL_SECONDS,
@@ -122,5 +123,42 @@ test("dynamo store defensively treats expired items as missing", async () => {
   nowMs += 61_000;
   assert.equal(await store.get(confirmationId), null);
   assert.equal(await store.size(), 0);
-  assert.equal(await store.size(), 0);
+});
+
+test("createPendingStore picks the memory store when no table is configured", async () => {
+  const { store, kind } = createPendingStore({ tableName: "" });
+  assert.equal(kind, "memory");
+  // A usable store, so a gated MCP call still mints a confirmationId offline.
+  const created = await store.put({
+    tool: "buy_stock",
+    arguments: { quantity: 10 },
+  });
+  assert.ok(await store.get(created.confirmationId));
+});
+
+test("createPendingStore picks the DynamoDB store when a table is configured", async () => {
+  const rows = new Map();
+  const client = fakeDynamo({
+    PutItemCommand(input) {
+      rows.set(input.Item.confirmationId.S, input.Item);
+      return {};
+    },
+    GetItemCommand(input) {
+      return { Item: rows.get(input.Key.confirmationId.S) };
+    },
+  });
+  const { store, kind } = createPendingStore({
+    tableName: "pending_confirmations",
+    client,
+    ttlSeconds: DEFAULT_TTL_SECONDS,
+  });
+
+  assert.equal(kind, "dynamodb");
+  const created = await store.put({
+    tool: "transfer_cash",
+    arguments: { amount: 500 },
+  });
+  const got = await store.get(created.confirmationId);
+  assert.equal(got.tool, "transfer_cash");
+  assert.deepEqual(got.arguments, { amount: 500 });
 });
