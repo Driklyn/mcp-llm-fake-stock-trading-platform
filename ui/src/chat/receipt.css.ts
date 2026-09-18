@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { space } from "../sprinkles.css.ts";
+import { colors, fontSizes, space } from "../sprinkles.css.ts";
 
 export const receipt = style({
   display: "flex",
@@ -8,12 +8,12 @@ export const receipt = style({
 });
 
 export const row = style({
-  fontSize: "0.95rem",
-  color: "#ecf4ff",
+  fontSize: fontSizes.lg,
+  color: colors.textStrong,
 });
 
 export const note = style({
   marginTop: space.xs,
-  fontSize: "0.85rem",
-  color: "#9ab4d6",
+  fontSize: fontSizes.base,
+  color: colors.textMuted,
 });

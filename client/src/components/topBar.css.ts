@@ -1,5 +1,14 @@
 import { style } from "@vanilla-extract/css";
-import { radii, space } from "ui";
+import {
+  borderWidths,
+  colors,
+  fontSizes,
+  fontWeights,
+  fonts,
+  lineHeights,
+  radii,
+  space,
+} from "ui";
 
 export const githubLink = style({
   display: "inline-flex",
@@ -7,13 +16,13 @@ export const githubLink = style({
   gap: space.sm,
   textDecoration: "none",
   whiteSpace: "nowrap",
-  fontFamily: "inherit",
-  fontSize: "0.875rem",
-  fontWeight: 700,
-  lineHeight: 1,
-  color: "#9ab4d6",
-  background: "rgba(10, 19, 27, 0.6)",
-  border: "1px solid rgba(149, 170, 200, 0.2)",
+  fontFamily: fonts.body,
+  fontSize: fontSizes.base,
+  fontWeight: fontWeights.bold,
+  lineHeight: lineHeights.none,
+  color: colors.textMuted,
+  background: colors.surfaceInsetSoft,
+  border: `${borderWidths.thin}px solid ${colors.border}`,
   borderRadius: radii.full,
   paddingTop: space.sm,
   paddingBottom: space.sm,
@@ -23,8 +32,8 @@ export const githubLink = style({
     "color 0.15s ease, border-color 0.15s ease, background 0.15s ease",
 
   ":hover": {
-    color: "#dfeafc",
-    background: "rgba(18, 33, 49, 0.9)",
+    color: colors.text,
+    background: colors.surfaceCard,
   },
 });
 

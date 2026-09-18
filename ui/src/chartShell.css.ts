@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { radii, space } from "./sprinkles.css.ts";
+import { colors, radii, space } from "./sprinkles.css.ts";
 
 export const shell = style({
   display: "block",
@@ -9,8 +9,7 @@ export const shell = style({
   minHeight: 220,
   height: space.full,
   flex: "1 1 auto",
-  background:
-    "linear-gradient(180deg, rgba(22, 32, 44, 0.8), rgba(11, 19, 27, 0.8))",
+  background: colors.chartGradient,
   overflow: "hidden",
 
   "@media": {

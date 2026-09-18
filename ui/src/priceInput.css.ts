@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { space } from "./sprinkles.css.ts";
+import { backgrounds, borderWidths, colors, space } from "./sprinkles.css.ts";
 import { input as baseInput } from "./input.css.ts";
 
 // Single-cell grid: the "$" prefix and the input share the same grid area and
@@ -20,9 +20,9 @@ export const prefix = style({
   justifySelf: "start",
   position: "relative",
   zIndex: 1, // keep the "$" above the input's background (shared border-box)
-  border: "1px solid transparent",
-  background: "transparent",
-  color: "rgba(149, 170, 200, 0.7)",
+  border: `${borderWidths.thin}px solid ${backgrounds.transparent}`,
+  background: backgrounds.transparent,
+  color: colors.textPlaceholder,
   pointerEvents: "none",
   userSelect: "none",
 });

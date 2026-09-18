@@ -1,4 +1,4 @@
-import { Stat, StatsGrid } from "ui";
+import { Stat, StatsGrid, sprinkles } from "ui";
 import type { Account } from "../types";
 
 export type PortfolioPanelProps = {
@@ -16,14 +16,14 @@ export default function PortfolioPanel({ account }: PortfolioPanelProps) {
           label="Gains/Losses"
           value={
             <span
-              style={{
+              className={sprinkles({
                 color:
                   account.totalGainsLosses > 0
-                    ? "#4caf79"
+                    ? "positive"
                     : account.totalGainsLosses < 0
-                      ? "#ef6369"
-                      : undefined,
-              }}
+                      ? "negative"
+                      : "text",
+              })}
             >
               {account.totalGainsLosses >= 0 ? "+" : "−"}$
               {Math.abs(account.totalGainsLosses).toFixed(2)}

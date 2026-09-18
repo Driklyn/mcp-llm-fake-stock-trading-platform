@@ -1,5 +1,12 @@
 import { style } from "@vanilla-extract/css";
-import { radii, space } from "./sprinkles.css.ts";
+import {
+  backgrounds,
+  colors,
+  fontSizes,
+  fontWeights,
+  radii,
+  space,
+} from "./sprinkles.css.ts";
 
 export const root = style({
   display: "flex",
@@ -14,7 +21,7 @@ export const tabList = style({
   gap: space.sm,
   marginBottom: space.lg,
   paddingBottom: space.sm,
-  borderBottom: "1px solid rgba(149, 170, 200, 0.2)",
+  borderBottom: `1px solid ${colors.border}`,
 });
 
 export const tab = style({
@@ -25,29 +32,29 @@ export const tab = style({
   paddingRight: space.md,
   flex: 1,
   appearance: "none",
-  border: "1px solid rgba(149, 170, 200, 0.2)",
+  border: `1px solid ${colors.border}`,
   cursor: "pointer",
-  fontWeight: 700,
-  fontSize: "0.92rem",
-  background: "rgba(10, 19, 27, 0.6)",
-  color: "#9ab4d6",
+  fontWeight: fontWeights.bold,
+  fontSize: fontSizes.lg,
+  background: colors.surfaceInsetSoft,
+  color: colors.textMuted,
   transition:
     "background 0.15s ease, color 0.15s ease, border-color 0.15s ease",
 
   ":hover": {
-    background: "rgba(18, 33, 49, 0.9)",
-    color: "#dfeafc",
+    background: colors.surfaceCard,
+    color: colors.text,
   },
 });
 
 export const active = style({
-  background: "linear-gradient(135deg, #2db978, #1aaf76)",
-  borderColor: "transparent",
-  color: "white",
+  background: colors.gradientPrimary,
+  borderColor: backgrounds.transparent,
+  color: colors.textOnPrimary,
 
   ":hover": {
-    background: "linear-gradient(135deg, #2db978, #1aaf76)",
-    color: "white",
+    background: colors.gradientPrimary,
+    color: colors.textOnPrimary,
   },
 });
 

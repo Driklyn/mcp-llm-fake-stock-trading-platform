@@ -1,10 +1,10 @@
 import { style } from "@vanilla-extract/css";
-import { space } from "./sprinkles.css.ts";
+import { colors, fontSizes, letterSpacings, space } from "./sprinkles.css.ts";
 
 export const eyebrow = style({
   margin: space.none,
-  color: "#9ab4d6",
+  color: colors.textMuted,
   textTransform: "uppercase",
-  letterSpacing: "0.12em",
-  fontSize: 11,
+  letterSpacing: letterSpacings.wide,
+  fontSize: fontSizes.xs,
 });

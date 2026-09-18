@@ -1,17 +1,25 @@
 import { style } from "@vanilla-extract/css";
-import { radii, space } from "./sprinkles.css.ts";
+import {
+  backgrounds,
+  borderWidths,
+  colors,
+  fontSizes,
+  fontWeights,
+  radii,
+  space,
+} from "./sprinkles.css.ts";
 
 export const section = style({
   marginTop: space.xl,
   padding: space.lg,
   borderRadius: radii.md,
-  background: "rgba(18, 33, 49, 0.9)",
+  background: colors.surfaceCard,
 });
 
 export const title = style({
   marginBottom: space.md,
   marginTop: space.none,
-  fontSize: "1.05rem",
+  fontSize: fontSizes.xl,
 });
 
 export const filters = style({
@@ -30,9 +38,9 @@ export const filterGroup = style({
 });
 
 export const filterLabel = style({
-  color: "#9ab4d6",
-  fontSize: 12,
-  fontWeight: 600,
+  color: colors.textMuted,
+  fontSize: fontSizes.sm,
+  fontWeight: fontWeights.semibold,
 });
 
 export const chip = style({
@@ -41,22 +49,22 @@ export const chip = style({
   paddingTop: space.xs,
   paddingBottom: space.xs,
   borderRadius: radii.full,
-  border: "1px solid rgba(149, 170, 200, 0.3)",
-  background: "transparent",
-  color: "#dfeafc",
+  border: `${borderWidths.thin}px solid ${colors.borderStrong}`,
+  background: backgrounds.transparent,
+  color: colors.text,
   cursor: "pointer",
-  fontSize: 12,
-  fontWeight: 600,
+  fontSize: fontSizes.sm,
+  fontWeight: fontWeights.semibold,
   ":hover": {
-    borderColor: "rgba(76, 186, 242, 0.6)",
-    color: "#ecf4ff",
+    borderColor: colors.borderAccentSoft,
+    color: colors.textStrong,
   },
 });
 
 export const chipActive = style({
-  background: "rgba(76, 186, 242, 0.18)",
-  borderColor: "rgba(76, 186, 242, 0.7)",
-  color: "#ecf4ff",
+  background: colors.chipActiveBackground,
+  borderColor: colors.borderAccent,
+  color: colors.textStrong,
 });
 
 export const priceInputs = style({
@@ -73,13 +81,13 @@ export const priceInput = style({
   paddingBottom: space.xs,
   borderRadius: radii.sm,
   width: 84,
-  border: "1px solid rgba(149, 170, 200, 0.3)",
-  background: "rgba(9, 17, 25, 0.9)",
-  color: "#ecf4ff",
-  fontSize: 13,
+  border: `${borderWidths.thin}px solid ${colors.borderStrong}`,
+  background: colors.surfaceOverlay,
+  color: colors.textStrong,
+  fontSize: fontSizes.md,
   ":focus": {
     outline: "none",
-    borderColor: "rgba(76, 186, 242, 0.7)",
+    borderColor: colors.borderAccent,
   },
 });
 
@@ -88,31 +96,31 @@ export const tableWrapper = style({
 });
 
 export const positive = style({
-  color: "#4ade80",
-  fontWeight: 700,
+  color: colors.positive,
+  fontWeight: fontWeights.bold,
 });
 
 export const negative = style({
-  color: "#f87171",
-  fontWeight: 700,
+  color: colors.negative,
+  fontWeight: fontWeights.bold,
 });
 
 export const statusOpen = style({
-  color: "#fbbf24",
+  color: colors.warning,
 });
 
 export const statusCompleted = style({
-  color: "#4ade80",
+  color: colors.positive,
 });
 
 export const statusCancelled = style({
-  color: "#9ca3af",
+  color: colors.neutral,
 });
 
 export const statusFailed = style({
-  color: "#f87171",
+  color: colors.negative,
 });
 
 export const muted = style({
-  color: "#7f93af",
+  color: colors.textFaint,
 });

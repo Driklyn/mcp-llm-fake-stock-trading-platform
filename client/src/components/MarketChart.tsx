@@ -6,13 +6,26 @@ import {
   useState,
   type MouseEvent,
 } from "react";
-import { ChartShell, Eyebrow, Stat, StatsGrid, sprinkles } from "ui";
+import {
+  ChartShell,
+  Eyebrow,
+  Stat,
+  StatsGrid,
+  colors,
+  fontSizes,
+  fontWeights,
+  fonts,
+  radii,
+  sprinkles,
+} from "ui";
 import {
   buildChartGeometry,
   buildChartSeries,
   type MappedChartPoint,
 } from "../utils/chart";
 import type { ChartInputPoint } from "../types";
+
+const chartFontStack = fonts.body;
 
 export type MarketChartProps = {
   points: ChartInputPoint[];
@@ -111,17 +124,17 @@ export default function MarketChart({
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
 
-    ctx.fillStyle = "rgba(22, 32, 44, 0.8)";
+    ctx.fillStyle = colors.surfaceChart;
     ctx.fillRect(0, 0, cssWidth, cssHeight);
 
-    ctx.fillStyle = "#9ab4d6";
-    ctx.font = '600 12px "Segoe UI", Inter, sans-serif';
+    ctx.fillStyle = colors.textMuted;
+    ctx.font = `${fontWeights.semibold} ${fontSizes.sm}px ${chartFontStack}`;
 
     chartGeometry.yTicks.forEach((tick) => {
       ctx.beginPath();
       ctx.moveTo(chartGeometry.padding.left, tick.y);
       ctx.lineTo(chartWidth - chartGeometry.padding.right, tick.y);
-      ctx.strokeStyle = "rgba(154, 180, 214, 0.18)";
+      ctx.strokeStyle = colors.gridLine;
       ctx.lineWidth = 1;
       ctx.stroke();
 
@@ -138,7 +151,7 @@ export default function MarketChart({
       ctx.beginPath();
       ctx.moveTo(tick.x, chartGeometry.padding.top);
       ctx.lineTo(tick.x, chartHeight - chartGeometry.padding.bottom);
-      ctx.strokeStyle = "rgba(154, 180, 214, 0.18)";
+      ctx.strokeStyle = colors.gridLine;
       ctx.setLineDash([4, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -156,7 +169,7 @@ export default function MarketChart({
         ctx.lineTo(point.x, point.y);
       }
     });
-    ctx.strokeStyle = "#4cbaf2";
+    ctx.strokeStyle = colors.accent;
     ctx.lineWidth = 3;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
@@ -166,16 +179,16 @@ export default function MarketChart({
       ctx.beginPath();
       ctx.moveTo(activePoint.x, chartGeometry.padding.top);
       ctx.lineTo(activePoint.x, chartHeight - chartGeometry.padding.bottom);
-      ctx.strokeStyle = "rgba(255,255,255,0.5)";
+      ctx.strokeStyle = colors.textOnPrimary;
       ctx.setLineDash([4, 4]);
       ctx.stroke();
       ctx.setLineDash([]);
 
       ctx.beginPath();
-      ctx.fillStyle = "#ffffff";
+      ctx.fillStyle = colors.textOnPrimary;
       ctx.arc(activePoint.x, activePoint.y, 5, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = "#4cbaf2";
+      ctx.strokeStyle = colors.accent;
       ctx.lineWidth = 2;
       ctx.stroke();
 
@@ -193,18 +206,18 @@ export default function MarketChart({
       );
 
       ctx.beginPath();
-      ctx.fillStyle = "rgba(9, 17, 25, 0.9)";
+      ctx.fillStyle = colors.surfaceOverlay;
       ctx.roundRect(
         bubbleX - bubbleWidth / 2,
         bubbleY - bubbleHeight / 2,
         bubbleWidth,
         bubbleHeight,
-        8,
+        radii.sm,
       );
       ctx.fill();
 
-      ctx.fillStyle = "#ecf4ff";
-      ctx.font = '700 12px "Segoe UI", Inter, sans-serif';
+      ctx.fillStyle = colors.textStrong;
+      ctx.font = `${fontWeights.bold} ${fontSizes.sm}px ${chartFontStack}`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(tooltipText, bubbleX, bubbleY);
@@ -221,17 +234,17 @@ export default function MarketChart({
           rightTextBound - safeMaxX,
         );
         const adjustedWidth = bubbleWidth + overshoot * 2;
-        ctx.fillStyle = "rgba(9, 17, 25, 0.9)";
+        ctx.fillStyle = colors.surfaceOverlay;
         ctx.beginPath();
         ctx.roundRect(
           bubbleX - adjustedWidth / 2,
           bubbleY - bubbleHeight / 2,
           adjustedWidth,
           bubbleHeight,
-          8,
+          radii.sm,
         );
         ctx.fill();
-        ctx.fillStyle = "#ecf4ff";
+        ctx.fillStyle = colors.textStrong;
         ctx.fillText(tooltipText, bubbleX, bubbleY);
       }
     }
@@ -258,8 +271,10 @@ export default function MarketChart({
           value={price != null ? `$${price.toFixed(2)}` : "Loading…"}
         >
           <div
-            className={sprinkles({ marginTop: "xs" })}
-            style={{ fontSize: 11 }}
+            className={sprinkles({
+              marginTop: "xs",
+              fontSize: "xs",
+            })}
           >
             Refreshing in {refreshSeconds}s
           </div>

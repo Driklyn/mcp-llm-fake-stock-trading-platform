@@ -1,5 +1,11 @@
 import { style } from "@vanilla-extract/css";
-import { radii, space } from "./sprinkles.css.ts";
+import {
+  colors,
+  fontWeights,
+  opacity,
+  radii,
+  space,
+} from "./sprinkles.css.ts";
 
 export const button = style({
   borderRadius: radii.sm,
@@ -10,16 +16,16 @@ export const button = style({
   appearance: "none",
   border: "none",
   cursor: "pointer",
-  fontWeight: 700,
-  background: "linear-gradient(135deg, #2db978, #1aaf76)",
-  color: "white",
+  fontWeight: fontWeights.bold,
+  background: colors.gradientPrimary,
+  color: colors.textOnPrimary,
 });
 
 export const secondary = style({
-  background: "linear-gradient(135deg, #4d6b94, #3a5f8a)",
+  background: colors.gradientSecondary,
 });
 
 export const disabled = style({
-  opacity: 0.6,
+  opacity: opacity.disabled,
   cursor: "not-allowed",
 });

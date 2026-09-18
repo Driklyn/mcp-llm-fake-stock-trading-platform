@@ -4,7 +4,23 @@ export {
   type ButtonVariant,
 } from "./Button";
 export { default as Tabs, type Tab, type TabsProps } from "./Tabs";
-export { sprinkles, space, radii, type Sprinkles } from "./sprinkles.css.ts";
+export {
+  sprinkles,
+  space,
+  radii,
+  fonts,
+  fontSizes,
+  fontWeights,
+  lineHeights,
+  letterSpacings,
+  colors,
+  backgrounds,
+  shadows,
+  opacity,
+  borderWidths,
+  type Sprinkles,
+} from "./sprinkles.css.ts";
+
 
 // Layout
 export { default as AppShell, type AppShellProps } from "./AppShell";

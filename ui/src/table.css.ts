@@ -1,11 +1,17 @@
 import { style } from "@vanilla-extract/css";
-import { space } from "./sprinkles.css.ts";
+import {
+  colors,
+  fontSizes,
+  fontWeights,
+  opacity,
+  space,
+} from "./sprinkles.css.ts";
 
 export const table = style({
   width: space.full,
   borderCollapse: "collapse",
-  fontSize: 14,
-  color: "#dfeafc",
+  fontSize: fontSizes.base,
+  color: colors.text,
 });
 
 export const headerCell = style({
@@ -14,9 +20,9 @@ export const headerCell = style({
   paddingTop: space.sm,
   paddingBottom: space.sm,
   textAlign: "left",
-  borderBottom: "1px solid rgba(149, 170, 200, 0.25)",
-  color: "#9ab4d6",
-  fontWeight: 600,
+  borderBottom: `1px solid ${colors.borderHeader}`,
+  color: colors.textMuted,
+  fontWeight: fontWeights.semibold,
   whiteSpace: "nowrap",
 });
 
@@ -26,15 +32,15 @@ export const sortableHeader = style([
     cursor: "pointer",
     userSelect: "none",
     ":hover": {
-      color: "#ecf4ff",
+      color: colors.textStrong,
     },
   },
 ]);
 
 export const sortIndicator = style({
   marginLeft: space.xs,
-  opacity: 0.7,
-  fontSize: 12,
+  opacity: opacity.muted,
+  fontSize: fontSizes.sm,
 });
 
 export const cell = style({
@@ -42,17 +48,17 @@ export const cell = style({
   paddingRight: space.md,
   paddingTop: space.sm,
   paddingBottom: space.sm,
-  borderBottom: "1px solid rgba(149, 170, 200, 0.12)",
+  borderBottom: `1px solid ${colors.borderSubtle}`,
 });
 
 export const row = style({
   ":hover": {
-    background: "rgba(76, 186, 242, 0.06)",
+    background: colors.rowHover,
   },
 });
 
 export const emptyCell = style({
   padding: space.xl,
   textAlign: "center",
-  color: "#7f93af",
+  color: colors.textFaint,
 });
